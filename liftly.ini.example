@@ -1,0 +1,18 @@
+# 站会儿配置文件
+# 复制为 liftly.ini，放在 liftly.exe 同目录。
+# 以 # 或 ; 开头的行是注释。
+
+# 工作时长（分钟），1-600
+work_minutes = 45
+
+# 休息时长（分钟），1-120
+break_minutes = 5
+
+# 锁定前提醒秒数，0-600；0 表示不提醒
+warn_seconds = 60
+
+# 锁屏期间暂停计时，解锁或睡眠唤醒后是否重新开始一个完整工作周期
+reset_on_unlock = true
+
+# 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁
+emergency_unlock = true
