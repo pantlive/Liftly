@@ -1,7 +1,8 @@
-//! Windows 专用实现：单实例、隐藏消息窗口、托盘、计时驱动与休息锁定。
+//! Windows 专用实现：单实例、隐藏消息窗口、托盘、提醒弹窗、计时驱动与休息锁定。
 
 pub mod hooks;
 pub mod overlay;
+pub mod popup;
 pub mod tray;
 
 use std::cell::RefCell;
@@ -94,6 +95,7 @@ pub fn run() {
             schedule,
             tray: tray::Tray::new(hwnd, "站会儿"),
             overlay: overlay::Overlay::new(),
+            popup: popup::Popup::new(),
             hooks: None,
             wts_registered: false,
             away: false,
@@ -210,6 +212,7 @@ struct App {
     schedule: Schedule,
     tray: tray::Tray,
     overlay: overlay::Overlay,
+    popup: popup::Popup,
     hooks: Option<hooks::Hooks>,
     wts_registered: bool,
     away: bool,
@@ -218,6 +221,10 @@ struct App {
 impl App {
     fn update_tip(&mut self, now: u64) {
         let tip = match self.schedule.phase() {
+            Phase::Working if self.schedule.warning_active(now) => {
+                let secs = self.schedule.remaining_ms(now).div_ceil(1_000);
+                format!("站会儿：{} 秒后休息", secs)
+            }
             Phase::Working => {
                 let minutes = self.schedule.remaining_ms(now).saturating_add(59_999) / 60_000;
                 format!("站会儿：距离休息还有 {} 分钟", minutes.max(1))
@@ -242,8 +249,12 @@ impl App {
         for event in events {
             match event {
                 Event::Warn { secs_left } => {
-                    let text = format!("还有 {} 秒就要站起来活动啦，请保存手头工作。", secs_left);
-                    self.tray.balloon("站会儿", &text);
+                    if !self.popup.show(self.schedule.deadline_ms()) {
+                        // 弹窗创建失败时保留原来的托盘气泡提醒。
+                        let text =
+                            format!("还有 {} 秒就要站起来活动啦，请保存手头工作。", secs_left);
+                        self.tray.balloon("站会儿", &text);
+                    }
                 }
                 Event::StartBreak => {
                     // 菜单的模态循环会分发 WM_TIMER；进入休息前先关闭菜单。
@@ -261,6 +272,14 @@ impl App {
             }
         }
 
+        if self.schedule.warning_active(now) {
+            if self.popup.is_visible() {
+                self.popup.refresh();
+            }
+        } else if self.popup.is_visible() {
+            self.popup.hide();
+        }
+
         if self.schedule.phase() == Phase::Breaking {
             // LL 钩子可能被系统静默卸载，休息期间随每秒刷新一起续装。
             if let Some(hooks) = self.hooks.as_mut() {
@@ -273,6 +292,7 @@ impl App {
     }
 
     fn enter_break(&mut self, now: u64) {
+        self.popup.hide();
         let deadline = self.schedule.deadline_ms();
         self.overlay.start(deadline, self.cfg.emergency_unlock);
         if self.hooks.is_none() {
@@ -301,6 +321,7 @@ impl App {
             Phase::Paused => self.schedule.resume(now),
             Phase::Breaking => return,
         }
+        self.popup.hide();
         self.update_tip(now);
         self.arm_timer(now);
     }
@@ -311,6 +332,7 @@ impl App {
         }
         let now = now_ms();
         self.schedule.reset_work(now);
+        self.popup.hide();
         self.update_tip(now);
         self.arm_timer(now);
     }
@@ -346,6 +368,7 @@ impl App {
             KillTimer(self.hwnd, TIMER_ID);
         }
         self.stop_break_resources();
+        self.popup.hide();
         self.tray.remove();
         if self.wts_registered {
             unsafe {
@@ -394,6 +417,7 @@ impl App {
                             let now = now_ms();
                             self.schedule.pause(now);
                             self.away = true;
+                            self.popup.hide();
                             self.update_tip(now);
                             self.arm_timer(now);
                         }
@@ -401,6 +425,7 @@ impl App {
                             let now = now_ms();
                             self.schedule.reset_work(now);
                             self.away = false;
+                            self.popup.hide();
                             self.update_tip(now);
                             self.arm_timer(now);
                         }
@@ -420,6 +445,7 @@ impl App {
                 {
                     let now = now_ms();
                     self.schedule.reset_work(now);
+                    self.popup.hide();
                     self.update_tip(now);
                     self.arm_timer(now);
                 }

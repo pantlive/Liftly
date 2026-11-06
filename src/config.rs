@@ -1,5 +1,31 @@
 //! 配置解析。这里只包含平台无关逻辑，方便在非 Windows 平台上跑单元测试。
 
+use std::ops::RangeInclusive;
+
+/// 工作时长的合法范围（分钟）。
+pub const WORK_RANGE: RangeInclusive<u32> = 1..=600;
+/// 休息时长的合法范围（分钟）。
+pub const BREAK_RANGE: RangeInclusive<u32> = 1..=120;
+/// 提醒秒数的上限。
+pub const WARN_MAX: u32 = 600;
+
+/// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
+const INI_KEYS: [&str; 5] = [
+    "work_minutes",
+    "break_minutes",
+    "warn_seconds",
+    "reset_on_unlock",
+    "emergency_unlock",
+];
+
+const INI_COMMENTS: [&str; 5] = [
+    "# 工作时长（分钟），1-600",
+    "# 休息时长（分钟），1-120",
+    "# 锁定前提醒秒数，0-600；0 表示不提醒",
+    "# 锁屏期间暂停计时，解锁或睡眠唤醒后是否重新开始一个完整工作周期",
+    "# 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁",
+];
+
 /// 运行时配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Config {
@@ -76,21 +102,21 @@ impl Config {
         match key {
             "work_minutes" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    if (1..=600).contains(&v) {
+                    if WORK_RANGE.contains(&v) {
                         self.work_minutes = v;
                     }
                 }
             }
             "break_minutes" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    if (1..=120).contains(&v) {
+                    if BREAK_RANGE.contains(&v) {
                         self.break_minutes = v;
                     }
                 }
             }
             "warn_seconds" => {
                 if let Ok(v) = value.parse::<u32>() {
-                    if v <= 600 {
+                    if v <= WARN_MAX {
                         self.warn_seconds = v;
                     }
                 }
@@ -106,6 +132,135 @@ impl Config {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// 用三个时长值生成新配置，任一项越界时返回中文错误。
+    pub fn with_times(
+        &self,
+        work_minutes: u32,
+        break_minutes: u32,
+        warn_seconds: u32,
+    ) -> Result<Config, String> {
+        if !WORK_RANGE.contains(&work_minutes) {
+            return Err(format!(
+                "工作时长必须在 {} 到 {} 分钟之间",
+                WORK_RANGE.start(),
+                WORK_RANGE.end()
+            ));
+        }
+        if !BREAK_RANGE.contains(&break_minutes) {
+            return Err(format!(
+                "休息时长必须在 {} 到 {} 分钟之间",
+                BREAK_RANGE.start(),
+                BREAK_RANGE.end()
+            ));
+        }
+        if warn_seconds > WARN_MAX {
+            return Err(format!("提醒秒数必须在 0 到 {} 秒之间", WARN_MAX));
+        }
+
+        let mut cfg = self.clone();
+        cfg.work_minutes = work_minutes;
+        cfg.break_minutes = break_minutes;
+        cfg.warn_seconds = warn_seconds;
+        cfg.normalize();
+        Ok(cfg)
+    }
+
+    /// 在原 INI 文本基础上写回全部已知键，保留注释、空行、未知键和原有顺序。
+    pub fn to_ini_text(&self, original: &str) -> String {
+        let (bom, text) = match original.strip_prefix('\u{feff}') {
+            Some(rest) => ("\u{feff}", rest),
+            None => ("", original),
+        };
+        let newline = if text.contains("\r\n") { "\r\n" } else { "\n" };
+        let ends_with_newline = text.ends_with('\n');
+
+        // 空文件直接生成一份带注释的完整配置。
+        if text.is_empty() {
+            let mut lines = vec![
+                "# 站会儿配置文件".to_owned(),
+                "# 复制为 liftly.ini，放在 liftly.exe 同目录。".to_owned(),
+                "# 以 # 或 ; 开头的行是注释。".to_owned(),
+            ];
+            for (index, key) in INI_KEYS.iter().enumerate() {
+                lines.push(String::new());
+                lines.push(INI_COMMENTS[index].to_owned());
+                lines.push(format!("{} = {}", key, self.value_of(key)));
+            }
+            let mut output = String::from(bom);
+            output.push_str(&lines.join(newline));
+            output.push_str(newline);
+            return output;
+        }
+
+        let mut lines: Vec<String> = text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line).to_owned())
+            .collect();
+        if ends_with_newline {
+            lines.pop();
+        }
+
+        let mut present = [false; 5];
+        for line in &mut lines {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
+                continue;
+            }
+            let Some((key, value)) = trimmed.split_once('=') else {
+                continue;
+            };
+            let key = key.trim().to_ascii_lowercase();
+            let Some(index) = INI_KEYS
+                .iter()
+                .position(|known| *known == key.as_str())
+            else {
+                continue;
+            };
+            present[index] = true;
+            // 行尾注释原样保留，值与注释之间统一用一个空格分隔。
+            let comment = value
+                .find(['#', ';'])
+                .map(|pos| value[pos..].trim_end().to_owned());
+            let rendered = format!("{} = {}", INI_KEYS[index], self.value_of(INI_KEYS[index]));
+            *line = match comment {
+                Some(comment) => format!("{} {}", rendered, comment),
+                None => rendered,
+            };
+        }
+
+        let mut appended = false;
+        for (index, key) in INI_KEYS.iter().enumerate() {
+            if present[index] {
+                continue;
+            }
+            appended = true;
+            // 段与段之间空一行，便于阅读。
+            if matches!(lines.last(), Some(line) if !line.is_empty()) {
+                lines.push(String::new());
+            }
+            lines.push(INI_COMMENTS[index].to_owned());
+            lines.push(format!("{} = {}", key, self.value_of(key)));
+        }
+
+        let mut output = String::from(bom);
+        output.push_str(&lines.join(newline));
+        if appended || ends_with_newline {
+            output.push_str(newline);
+        }
+        output
+    }
+
+    fn value_of(&self, key: &str) -> String {
+        match key {
+            "work_minutes" => self.work_minutes.to_string(),
+            "break_minutes" => self.break_minutes.to_string(),
+            "warn_seconds" => self.warn_seconds.to_string(),
+            "reset_on_unlock" => self.reset_on_unlock.to_string(),
+            "emergency_unlock" => self.emergency_unlock.to_string(),
+            _ => String::new(),
         }
     }
 
@@ -244,5 +399,136 @@ mod tests {
         let mut cfg = Config::default();
         cfg.apply_args(["--work"].into_iter().map(str::to_owned));
         assert_eq!(cfg, Config::default());
+    }
+
+    #[test]
+    fn with_times_replaces_all_three_values() {
+        let cfg = Config::default().with_times(30, 10, 20).unwrap();
+        assert_eq!(cfg.work_minutes, 30);
+        assert_eq!(cfg.break_minutes, 10);
+        assert_eq!(cfg.warn_seconds, 20);
+        assert!(cfg.reset_on_unlock);
+        assert!(cfg.emergency_unlock);
+    }
+
+    #[test]
+    fn with_times_rejects_out_of_range_values() {
+        let cfg = Config::default();
+        assert!(cfg.with_times(0, 5, 60).is_err());
+        assert!(cfg.with_times(601, 5, 60).is_err());
+        assert!(cfg.with_times(45, 0, 60).is_err());
+        assert!(cfg.with_times(45, 121, 60).is_err());
+        assert!(cfg.with_times(45, 5, 601).is_err());
+        assert!(cfg.with_times(45, 5, 0).is_ok());
+
+        let err = cfg.with_times(0, 5, 60).unwrap_err();
+        assert!(err.contains("工作时长"));
+    }
+
+    #[test]
+    fn with_times_truncates_warning_to_work_time() {
+        let cfg = Config::default().with_times(1, 5, 600).unwrap();
+        assert_eq!(cfg.warn_seconds, 59);
+
+        let cfg = Config::default().with_times(2, 5, 60).unwrap();
+        assert_eq!(cfg.warn_seconds, 60);
+    }
+
+    #[test]
+    fn to_ini_text_from_empty_creates_full_config() {
+        let cfg = Config::default();
+        let text = cfg.to_ini_text("");
+        assert!(text.starts_with("# 站会儿配置文件\n"));
+        for key in INI_KEYS {
+            assert!(text.contains(key));
+        }
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_keeps_comments_blank_lines_and_unknown_keys() {
+        let cfg = Config::default();
+        let original = "# 头部注释\n\nunknown_key = 42\nwork_minutes = 20\n";
+        let text = cfg.to_ini_text(original);
+
+        assert!(text.contains("# 头部注释"));
+        assert!(text.contains("\n\n"));
+        assert!(text.contains("unknown_key = 42"));
+        assert!(text.contains("work_minutes = 45"));
+        // 原有顺序不变：头部注释、未知键、工作时长。
+        let header = text.find("# 头部注释").unwrap();
+        let unknown = text.find("unknown_key").unwrap();
+        let work = text.find("work_minutes = 45").unwrap();
+        assert!(header < unknown && unknown < work);
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_preserves_trailing_comments() {
+        let cfg = Config::default();
+        let original = "warn_seconds = 15 ; 行尾注释\nreset_on_unlock = false # 关闭\n";
+        let text = cfg.to_ini_text(original);
+
+        assert!(text.contains("warn_seconds = 60 ; 行尾注释"));
+        assert!(text.contains("reset_on_unlock = true # 关闭"));
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_appends_missing_keys_with_comments() {
+        let cfg = Config::default();
+        let text = cfg.to_ini_text("work_minutes = 30");
+
+        assert!(text.contains("# 休息时长（分钟），1-120"));
+        assert!(text.contains("break_minutes = 5"));
+        assert!(text.ends_with('\n'));
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_preserves_crlf() {
+        let cfg = Config::default();
+        let original = "# 注释\r\nwork_minutes = 20\r\n";
+        let text = cfg.to_ini_text(original);
+
+        assert!(text.starts_with("# 注释\r\n"));
+        assert!(text.contains("work_minutes = 45\r\n"));
+        let without_crlf = text.replace("\r\n", "");
+        assert!(!without_crlf.contains('\n'));
+        assert!(!without_crlf.contains('\r'));
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_preserves_bom() {
+        let cfg = Config::default();
+        let text = cfg.to_ini_text("\u{feff}work_minutes = 20\n");
+
+        assert!(text.starts_with("\u{feff}work_minutes = 45"));
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_replaces_duplicate_keys() {
+        let cfg = Config::default();
+        let original = "work_minutes = 20\nWORK_MINUTES = 30\n  work_minutes=40  \n";
+        let text = cfg.to_ini_text(original);
+
+        assert_eq!(text.matches("work_minutes = 45").count(), 3);
+        assert!(!text.contains("work_minutes = 20"));
+        assert_eq!(Config::parse_ini(&text), cfg);
+    }
+
+    #[test]
+    fn to_ini_text_round_trips_custom_config() {
+        let cfg = Config {
+            work_minutes: 1,
+            break_minutes: 120,
+            warn_seconds: 59,
+            reset_on_unlock: false,
+            emergency_unlock: false,
+        };
+        let text = cfg.to_ini_text("work_minutes = 10\nunknown = value # 注释\n");
+        assert_eq!(Config::parse_ini(&text), cfg);
     }
 }
