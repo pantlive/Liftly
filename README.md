@@ -69,6 +69,28 @@ liftly.exe --work 45 --break 5 --warn 60
 - 遮罩绘制使用 GDI 双缓冲，字体、画刷、位图和内存 DC 在每次绘制后释放，不会随秒数累积泄漏。
 - Release 构建使用 `opt-level = "z"`、LTO、单 codegen unit、`panic = "abort"` 和 strip，生成体积较小的单文件程序。
 
+## 图标
+
+图标资产位于 `assets/` 目录：
+
+- `assets/liftly.svg`：矢量母版（`256×256` viewBox），用于 32px 及以上尺寸的设计。
+- `assets/liftly.ico`：Windows 多尺寸图标，包含 16、20、24、32、40、48、64 和 256 共 8 个尺寸；256 帧为 PNG，其余为 32 位 BMP。
+- `assets/liftly.png`：`256×256` 预览图。
+
+设计采用从 `#3DDC97` 到 `#0B7A75` 的青绿渐变圆角方块，中间是白色举手伸展的站立小人，外围环绕半透明计时圆弧；计时圆弧仅在 40px 及以上绘制。24px 及以下的底板铺满画布，并使用单独绘制的小人几何，避免头部和手部粘连，因此小尺寸并非直接由 SVG 缩放而来。
+
+重新生成需要 Python 3 和 Pillow：
+
+```bash
+python3 tools/gen_icon.py
+# 可选：额外输出深浅背景对照预览图（不要提交到仓库）
+python3 tools/gen_icon.py --preview /tmp/liftly-icon-preview.png
+```
+
+修改设计时需同步修改 `tools/gen_icon.py` 和 `assets/liftly.svg`。
+
+目前 `liftly.exe` 尚未嵌入该图标，托盘仍使用系统图标。
+
 ## 构建
 
 ```bash
