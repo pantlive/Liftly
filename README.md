@@ -69,21 +69,16 @@ liftly.exe --work 45 --break 5 --warn 60
 - 遮罩绘制使用 GDI 双缓冲，字体、画刷、位图和内存 DC 在每次绘制后释放，不会随秒数累积泄漏。
 - Release 构建使用 `opt-level = "z"`、LTO、单 codegen unit、`panic = "abort"` 和 strip，生成体积较小的单文件程序。
 
-## 从 Linux 交叉编译
+## 构建
 
 ```bash
-rustup target add x86_64-pc-windows-gnu
-pip install cargo-zigbuild ziglang
 cargo zigbuild --release --target x86_64-pc-windows-gnu
 # 产物：target/x86_64-pc-windows-gnu/release/liftly.exe
 ```
 
-在 Windows 本机也可以直接构建：
+Windows 本机可直接 `cargo build --release`（产物 `target\release\liftly.exe`）。
 
-```powershell
-cargo build --release
-# 产物：target\release\liftly.exe
-```
+完整的环境搭建步骤见 [docs/BUILD.md](docs/BUILD.md)。
 
 ## 已知限制
 
