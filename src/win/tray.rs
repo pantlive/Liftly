@@ -9,12 +9,12 @@ use windows_sys::Win32::UI::Shell::{
     NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, LoadIconW, PostMessageW,
-    SetForegroundWindow, TrackPopupMenu, IDI_APPLICATION, IDI_INFORMATION, MF_SEPARATOR, MF_STRING,
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetSystemMetrics, PostMessageW,
+    SetForegroundWindow, TrackPopupMenu, MF_SEPARATOR, MF_STRING, SM_CXSMICON, SM_CYSMICON,
     TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
 };
 
-use super::{wide, WM_TRAY_CALLBACK};
+use super::{wide, AppIcon, WM_TRAY_CALLBACK};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -31,16 +31,16 @@ const ID_EXIT: usize = 5;
 
 pub struct Tray {
     nid: NOTIFYICONDATAW,
+    _icon: AppIcon,
     added: bool,
     last_tip: String,
 }
 
 impl Tray {
     pub fn new(hwnd: HWND, tip: &str) -> Self {
-        let mut icon = unsafe { LoadIconW(std::ptr::null_mut(), IDI_INFORMATION) };
-        if icon.is_null() {
-            icon = unsafe { LoadIconW(std::ptr::null_mut(), IDI_APPLICATION) };
-        }
+        // 图标持有至托盘移除之后；Explorer 重启时复用同一有效句柄。
+        let icon =
+            unsafe { AppIcon::load(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)) };
 
         let mut nid: NOTIFYICONDATAW = unsafe { std::mem::zeroed() };
         nid.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
@@ -48,11 +48,12 @@ impl Tray {
         nid.uID = 1;
         nid.uFlags = base_flags();
         nid.uCallbackMessage = WM_TRAY_CALLBACK;
-        nid.hIcon = icon;
+        nid.hIcon = icon.handle;
         copy_wide(&mut nid.szTip, tip);
 
         let mut tray = Self {
             nid,
+            _icon: icon,
             added: false,
             last_tip: tip.to_owned(),
         };
@@ -113,6 +114,12 @@ impl Tray {
             }
             self.added = false;
         }
+    }
+}
+
+impl Drop for Tray {
+    fn drop(&mut self) {
+        self.remove();
     }
 }
 

@@ -62,7 +62,7 @@ pub fn run() {
 
         let cfg = load_config();
         let hinstance = GetModuleHandleW(std::ptr::null());
-        register_main_class(hinstance);
+        let _main_icons = register_main_class(hinstance);
 
         let class = wide(WINDOW_CLASS);
         let title = wide("站会儿");
@@ -81,6 +81,7 @@ pub fn run() {
             std::ptr::null(),
         );
         if hwnd.is_null() {
+            UnregisterClassW(class.as_ptr(), hinstance);
             return;
         }
 
@@ -128,6 +129,8 @@ pub fn run() {
             }
             slot.take();
         });
+        // 先注销窗口类，再由局部变量释放该类引用的图标。
+        UnregisterClassW(class.as_ptr(), hinstance);
     }
 }
 
@@ -178,21 +181,73 @@ fn load_config() -> Config {
     cfg
 }
 
-unsafe fn register_main_class(hinstance: windows_sys::Win32::Foundation::HINSTANCE) {
+/// 自有图标按需释放；系统兜底图标为共享句柄，不销毁。
+struct AppIcon {
+    handle: HICON,
+    owned: bool,
+}
+
+impl AppIcon {
+    fn load(width: i32, height: i32) -> Self {
+        unsafe {
+            let handle = LoadImageW(
+                GetModuleHandleW(std::ptr::null()),
+                std::ptr::without_provenance::<u16>(1), // MAKEINTRESOURCEW(1)，组图标资源 ID。
+                IMAGE_ICON,
+                width,
+                height,
+                0,
+            ) as HICON;
+            if handle.is_null() {
+                Self {
+                    handle: LoadIconW(std::ptr::null_mut(), IDI_APPLICATION),
+                    owned: false,
+                }
+            } else {
+                Self {
+                    handle,
+                    owned: true,
+                }
+            }
+        }
+    }
+}
+
+impl Drop for AppIcon {
+    fn drop(&mut self) {
+        if self.owned {
+            unsafe {
+                DestroyIcon(self.handle);
+            }
+        }
+    }
+}
+
+unsafe fn register_main_class(
+    hinstance: windows_sys::Win32::Foundation::HINSTANCE,
+) -> [AppIcon; 2] {
     let class = wide(WINDOW_CLASS);
-    let wc = WNDCLASSW {
+    // 分别按系统尺寸加载大小图标，避免共享缓存返回错误尺寸。
+    let icons = [
+        AppIcon::load(GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON)),
+        AppIcon::load(GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON)),
+    ];
+    let wc = WNDCLASSEXW {
+        cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
         style: 0,
         lpfnWndProc: Some(main_wnd_proc),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: hinstance,
-        hIcon: LoadIconW(std::ptr::null_mut(), IDI_INFORMATION),
+        hIcon: icons[0].handle,
         hCursor: LoadCursorW(std::ptr::null_mut(), IDC_ARROW),
         hbrBackground: std::ptr::null_mut(),
         lpszMenuName: std::ptr::null(),
         lpszClassName: class.as_ptr(),
+        hIconSm: icons[1].handle,
     };
-    RegisterClassW(&wc);
+    RegisterClassExW(&wc);
+    icons
 }
 
 fn now_ms() -> u64 {

@@ -60,7 +60,7 @@ cargo-zigbuild --version
 cargo test
 ```
 
-可以在 Linux 上运行，是因为 `src/main.rs` 用 `#[cfg(any(windows, test))]` 让 `config` 和 `schedule` 模块在测试时也参与编译；而 Windows 相关的 `win` 模块只在 `windows` 下编译。因此这两个纯逻辑模块的单元测试能在 Linux 上跑，但不会覆盖托盘、遮罩和钩子等 Windows 功能。
+可以在 Linux 上运行，是因为 `src/main.rs` 用 `#[cfg(any(windows, test))]` 让 `config` 和 `schedule` 模块在测试时也参与编译，并通过测试专用模块运行 `build/rsrc.rs` 的 ICO 解析和 COFF 资源结构测试；而 Windows 相关的 `win` 模块只在 `windows` 下编译。这些测试不会覆盖托盘、遮罩和钩子等 Windows 运行时功能。
 
 ## 5. 交叉编译 release
 
@@ -78,6 +78,16 @@ target/x86_64-pc-windows-gnu/release/liftly.exe
 
 ```bash
 file target/x86_64-pc-windows-gnu/release/liftly.exe
+```
+
+构建脚本自动把 `assets/liftly.ico` 的 8 帧嵌入 exe：8 个 `RT_ICON`（ID 1–8）和 1 个 `RT_GROUP_ICON`（ID 1），语言 ID 为 0。资源通过纯 Rust 生成的 COFF 目标文件链接，不依赖 `windres`、`llvm-rc` 或 Windows SDK 的资源编译器，支持 x86_64、x86 和 aarch64 目标。
+
+可安装 Rust 的 LLVM 工具，检查最终 exe 的资源目录（以下命令适用于 Linux/WSL）：
+
+```bash
+rustup component add llvm-tools
+"$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-readobj" \
+  --coff-resources target/x86_64-pc-windows-gnu/release/liftly.exe
 ```
 
 ## 6. 从 WSL 复制到 Windows 磁盘
@@ -149,7 +159,7 @@ powershell.exe -NoProfile -Command "Start-Process -FilePath 'D:\Liftly\liftly.ex
 
 ## 9. 真机验证
 
-`cargo test` 只覆盖 `config` 和 `schedule`，交叉编译也只能验证 PE 格式和 DLL 依赖；托盘、提醒弹窗、遮罩、输入钩子和多显示器行为必须在 Windows 真机上确认。
+`cargo test` 覆盖 `config`、`schedule` 及图标资源生成器，交叉编译和资源检查可以验证 PE 格式、DLL 依赖及嵌入图标结构；托盘、提醒弹窗、遮罩、输入钩子和多显示器行为必须在 Windows 真机上确认。
 
 仓库自带一个自动化冒烟脚本，从 WSL 通过 `powershell.exe` 操作 Windows：
 
@@ -187,7 +197,8 @@ bash tools/win_smoke.sh /mnt/d/Liftly-verify
 
 自动化脚本通过后，再按下面的清单手动过一遍：
 
-- [ ] 托盘图标正常显示；右键菜单的四项（立即休息、暂停/继续计时、重新开始计时、退出）都能工作。当前 exe 未嵌入自定义图标，托盘显示系统图标是预期行为。
+- [ ] 托盘和资源管理器显示 Liftly 图标；右键菜单的四项（立即休息、暂停/继续计时、重新开始计时、退出）都能工作。Explorer 可能缓存旧图标，必要时改文件名或清理图标缓存。
+- [ ] 重启 Explorer 后托盘图标重新出现，仍显示 Liftly 图标；资源管理器中的 exe 图标正常。
 - [ ] 休息中同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 能紧急解锁；把 `emergency_unlock` 设为 `false` 后该组合键无效。
 - [ ] 在 100%/125%/150%/200% 缩放和多显示器（不同 DPI、副屏在左/上方）下，提醒弹窗位于主屏右下角，每个显示器都被遮罩完整覆盖。
 - [ ] 休息中键鼠输入被拦住；切到管理员权限窗口时受 UIPI 限制属于已知限制。

@@ -5,6 +5,10 @@ mod config;
 #[cfg(any(windows, test))]
 mod schedule;
 
+#[cfg(test)]
+#[path = "../build/rsrc.rs"]
+mod rsrc;
+
 #[cfg(windows)]
 mod win;
 
