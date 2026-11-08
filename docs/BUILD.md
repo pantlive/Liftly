@@ -80,7 +80,7 @@ target/x86_64-pc-windows-gnu/release/liftly.exe
 file target/x86_64-pc-windows-gnu/release/liftly.exe
 ```
 
-构建脚本自动把 `assets/liftly.ico` 的 8 帧嵌入 exe：8 个 `RT_ICON`（ID 1–8）和 1 个 `RT_GROUP_ICON`（ID 1），语言 ID 为 0。资源通过纯 Rust 生成的 COFF 目标文件链接，不依赖 `windres`、`llvm-rc` 或 Windows SDK 的资源编译器，支持 x86_64、x86 和 aarch64 目标。
+构建脚本自动把 `assets/liftly.ico` 的 8 帧嵌入 exe：8 个 `RT_ICON`（ID 1–8）、1 个 `RT_GROUP_ICON`（ID 1）和 1 个 `RT_MANIFEST`（ID 1，启用 Common Controls 6.0），语言 ID 均为 0。资源通过纯 Rust 生成的 COFF 目标文件链接，不依赖 `windres`、`llvm-rc` 或 Windows SDK 的资源编译器，支持 x86_64、x86 和 aarch64 目标。
 
 可安装 Rust 的 LLVM 工具，检查最终 exe 的资源目录（以下命令适用于 Linux/WSL）：
 
@@ -197,7 +197,12 @@ bash tools/win_smoke.sh /mnt/d/Liftly-verify
 
 自动化脚本通过后，再按下面的清单手动过一遍：
 
-- [ ] 托盘和资源管理器显示 Liftly 图标；右键菜单的四项（立即休息、暂停/继续计时、重新开始计时、退出）都能工作。Explorer 可能缓存旧图标，必要时改文件名或清理图标缓存。
+- [ ] 托盘和资源管理器显示 Liftly 图标；右键菜单的立即休息、暂停/继续计时、重新开始计时、退出都能工作。Explorer 可能缓存旧图标，必要时改文件名或清理图标缓存。
+- [ ] 默认配置下三个时长子菜单分别勾选 45 分钟、5 分钟、60 秒；INI 中工作时长为 37 时显示并勾选“自定义（37 分钟）”。
+- [ ] 选择预设后立即生效；只改对应键并保留其他值、注释、BOM 和 CRLF。以 `--work 10` 启动后修改休息时长，磁盘的工作时长不变；重启后保留已保存设置。
+- [ ] “设置…”、三个“自定义…”及双击托盘都能打开同一个设置窗口；重复打开只激活已有窗口。Tab、回车、Esc 正常，空值、非法值和越界值显示中文提示且窗口保持打开；两个开关可保存。
+- [ ] 设置窗口或校验提示打开期间计时持续推进，休息到点后自动关闭且不保存输入；暂停中修改设置仍保持暂停。
+- [ ] INI 不存在时保存生成带注释的完整配置；只读目录或非 UTF-8 INI 保存失败时显示气泡，原文件不被覆盖，本次运行新设置仍然生效。
 - [ ] 重启 Explorer 后托盘图标重新出现，仍显示 Liftly 图标；资源管理器中的 exe 图标正常。
 - [ ] 休息中同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 能紧急解锁；把 `emergency_unlock` 设为 `false` 后该组合键无效。
 - [ ] 在 100%/125%/150%/200% 缩放和多显示器（不同 DPI、副屏在左/上方）下，提醒弹窗位于主屏右下角，每个显示器都被遮罩完整覆盖。
