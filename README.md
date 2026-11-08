@@ -89,7 +89,7 @@ python3 tools/gen_icon.py --preview /tmp/liftly-icon-preview.png
 
 修改设计时需同步修改 `tools/gen_icon.py` 和 `assets/liftly.svg`。
 
-目前 `liftly.exe` 尚未嵌入该图标，托盘仍使用系统图标。
+构建时会自动将多尺寸图标嵌入 `liftly.exe`，资源管理器、托盘和窗口使用同一套 Liftly 图标，无需随 exe 分发 `assets/`。资源生成器使用纯 Rust，交叉编译和 Windows 本机构建均不需要额外安装资源编译器。
 
 ## 构建
 
