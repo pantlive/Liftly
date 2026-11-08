@@ -3,6 +3,7 @@
 pub mod hooks;
 pub mod overlay;
 pub mod popup;
+pub mod settings;
 pub mod tray;
 
 use std::cell::RefCell;
@@ -21,7 +22,7 @@ use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::Config;
+use crate::config::{merge_into_ini, Config, ConfigPatch};
 use crate::schedule::{Event, Phase, Schedule};
 
 const MUTEX_NAME: &str = "Local\\Liftly.SingleInstance";
@@ -164,10 +165,17 @@ unsafe fn set_dpi_awareness() {
     let _ = SetProcessDPIAware();
 }
 
+fn ini_path() -> std::io::Result<std::path::PathBuf> {
+    let exe = std::env::current_exe()?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| std::io::Error::other("无法确定程序目录"))?;
+    Ok(dir.join("liftly.ini"))
+}
+
 fn load_config() -> Config {
-    let ini = std::env::current_exe()
+    let ini = ini_path()
         .ok()
-        .and_then(|path| path.parent().map(|dir| dir.join("liftly.ini")))
         .and_then(|path| std::fs::read_to_string(path).ok());
     let mut cfg = match ini {
         Some(text) => Config::parse_ini(&text),
@@ -258,6 +266,7 @@ enum WndOutcome {
     Handled(LRESULT),
     Default,
     ShowMenu,
+    OpenSettings,
     DestroyMain,
 }
 
@@ -274,6 +283,33 @@ struct App {
 }
 
 impl App {
+    /// 所有设置入口共用同一流程，写盘失败仍保留本次运行的新配置。
+    fn apply_patch(&mut self, patch: ConfigPatch) {
+        let Ok(cfg) = self.cfg.apply_patch(&patch) else {
+            return;
+        };
+        self.cfg = cfg;
+        let now = now_ms();
+        self.schedule.apply_config(&self.cfg, now);
+        self.popup.hide();
+        self.update_tip(now);
+        self.arm_timer(now);
+        let saved = (|| -> Result<(), String> {
+            let path = ini_path().map_err(|error| error.to_string())?;
+            let original = match std::fs::read_to_string(&path) {
+                Ok(text) => text,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(error) => return Err(error.to_string()),
+            };
+            let text = merge_into_ini(&original, &patch)?;
+            std::fs::write(path, text).map_err(|error| error.to_string())
+        })();
+        if saved.is_err() {
+            self.tray
+                .balloon("站会儿", "已生效，但没能保存到 liftly.ini");
+        }
+    }
+
     fn update_tip(&mut self, now: u64) {
         let tip = match self.schedule.phase() {
             Phase::Working if self.schedule.warning_active(now) => {
@@ -318,6 +354,7 @@ impl App {
                             EndMenu();
                         }
                     }
+                    settings::close_without_save();
                     self.enter_break(now);
                 }
                 Event::EndBreak => {
@@ -419,6 +456,7 @@ impl App {
     }
 
     fn cleanup(&mut self) {
+        settings::close_without_save();
         unsafe {
             KillTimer(self.hwnd, TIMER_ID);
         }
@@ -452,6 +490,8 @@ impl App {
                 let mouse_msg = lparam as u32;
                 if mouse_msg == WM_RBUTTONUP || mouse_msg == WM_CONTEXTMENU {
                     WndOutcome::ShowMenu
+                } else if mouse_msg == WM_LBUTTONDBLCLK {
+                    WndOutcome::OpenSettings
                 } else {
                     WndOutcome::Handled(0)
                 }
@@ -553,6 +593,10 @@ unsafe extern "system" fn main_wnd_proc(
             show_tray_menu(hwnd);
             0
         }
+        WndOutcome::OpenSettings => {
+            open_settings(hwnd);
+            0
+        }
         WndOutcome::DestroyMain => {
             DestroyWindow(hwnd);
             0
@@ -563,65 +607,86 @@ unsafe extern "system" fn main_wnd_proc(
 /// 弹出托盘菜单。菜单期间不暂停定时器：TrackPopupMenu 的模态循环会分发 WM_TIMER，
 /// 若计时到点会在关闭菜单后进入休息。
 unsafe fn show_tray_menu(hwnd: HWND) {
-    let paused = APP.with(|cell| match cell.try_borrow() {
-        Ok(slot) => slot
-            .as_ref()
-            .map(|app| app.schedule.phase() == Phase::Paused)
-            .unwrap_or(false),
-        Err(_) => false,
-    });
-
-    MENU_OPEN.store(true, Ordering::SeqCst);
-
-    let action = tray::show_menu(hwnd, paused);
-    MENU_OPEN.store(false, Ordering::SeqCst);
-    let mut destroy = false;
-    let mut acted = false;
-
-    if let Some(action) = action {
-        destroy = APP.with(|cell| match cell.try_borrow_mut() {
-            Ok(mut slot) => match slot.as_mut() {
-                Some(app) => {
-                    acted = true;
-                    match action {
-                        tray::MenuAction::BreakNow => {
-                            app.break_now();
-                            false
-                        }
-                        tray::MenuAction::TogglePause => {
-                            app.toggle_pause();
-                            false
-                        }
-                        tray::MenuAction::Restart => {
-                            app.restart_work();
-                            false
-                        }
-                        tray::MenuAction::Exit => {
-                            app.cleanup();
-                            true
-                        }
-                    }
-                }
-                None => false,
-            },
-            Err(_) => false,
-        });
-    }
-
-    if destroy {
-        DestroyWindow(hwnd);
+    if settings::bring_to_front() || MENU_OPEN.load(Ordering::SeqCst) {
         return;
     }
+    let state = APP.with(|cell| {
+        let slot = cell.try_borrow().ok()?;
+        let app = slot.as_ref()?;
+        (app.schedule.phase() != Phase::Breaking)
+            .then(|| (app.schedule.phase() == Phase::Paused, app.cfg.clone()))
+    });
+    let Some((paused, cfg)) = state else {
+        return;
+    };
+    MENU_OPEN.store(true, Ordering::SeqCst);
+    let action = tray::show_menu(hwnd, paused, &cfg);
+    MENU_OPEN.store(false, Ordering::SeqCst);
 
-    // 菜单取消或普通操作后，重新装一个定时器。
-    let now = now_ms();
+    // 任何模态窗口都必须在释放 APP 借用后打开，确保 WM_TIMER 能重入。
+    if action == Some(tray::MenuAction::OpenSettings) {
+        open_settings(hwnd);
+        return;
+    }
+    let destroy = APP.with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return false;
+        };
+        let Some(app) = slot.as_mut() else {
+            return false;
+        };
+        match action {
+            Some(tray::MenuAction::BreakNow) => app.break_now(),
+            Some(tray::MenuAction::TogglePause) => app.toggle_pause(),
+            Some(tray::MenuAction::Restart) => app.restart_work(),
+            Some(tray::MenuAction::SetWork(value)) => app.apply_patch(ConfigPatch {
+                work_minutes: Some(value),
+                ..ConfigPatch::default()
+            }),
+            Some(tray::MenuAction::SetBreak(value)) => app.apply_patch(ConfigPatch {
+                break_minutes: Some(value),
+                ..ConfigPatch::default()
+            }),
+            Some(tray::MenuAction::SetWarn(value)) => app.apply_patch(ConfigPatch {
+                warn_seconds: Some(value),
+                ..ConfigPatch::default()
+            }),
+            Some(tray::MenuAction::Exit) => {
+                app.cleanup();
+                return true;
+            }
+            _ => {}
+        }
+        app.update_tip(now_ms());
+        app.arm_timer(now_ms());
+        false
+    });
+    if destroy {
+        DestroyWindow(hwnd);
+    }
+}
+
+/// 系统对话框自带模态消息循环；调用前后均只短暂借用 APP。
+unsafe fn open_settings(hwnd: HWND) {
+    if settings::bring_to_front() || MENU_OPEN.load(Ordering::SeqCst) {
+        return;
+    }
+    let cfg = APP.with(|cell| {
+        let slot = cell.try_borrow().ok()?;
+        let app = slot.as_ref()?;
+        (app.schedule.phase() != Phase::Breaking).then(|| app.cfg.clone())
+    });
+    let Some(cfg) = cfg else {
+        return;
+    };
+    let patch = settings::show(hwnd, &cfg);
     APP.with(|cell| {
         if let Ok(mut slot) = cell.try_borrow_mut() {
             if let Some(app) = slot.as_mut() {
-                if !acted {
-                    app.update_tip(now);
+                if let Some(patch) = patch {
+                    app.apply_patch(patch);
                 }
-                app.arm_timer(now);
+                app.arm_timer(now_ms());
             }
         }
     });

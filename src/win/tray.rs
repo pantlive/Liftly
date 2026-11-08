@@ -10,23 +10,29 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetSystemMetrics, PostMessageW,
-    SetForegroundWindow, TrackPopupMenu, MF_SEPARATOR, MF_STRING, SM_CXSMICON, SM_CYSMICON,
-    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
+    SetForegroundWindow, TrackPopupMenu, HMENU, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
+    SM_CXSMICON, SM_CYSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
 };
 
 use super::{wide, AppIcon, WM_TRAY_CALLBACK};
+use crate::config::{Config, BREAK_PRESETS, WARN_PRESETS, WORK_PRESETS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
     BreakNow,
     TogglePause,
     Restart,
+    SetWork(u32),
+    SetBreak(u32),
+    SetWarn(u32),
+    OpenSettings,
     Exit,
 }
 
 const ID_BREAK_NOW: usize = 1;
 const ID_TOGGLE_PAUSE: usize = 2;
 const ID_RESTART: usize = 3;
+const ID_SETTINGS: usize = 4;
 const ID_EXIT: usize = 5;
 
 pub struct Tray {
@@ -143,7 +149,7 @@ fn copy_wide(dst: &mut [u16], text: &str) {
 }
 
 /// 在鼠标位置弹出右键菜单；菜单期间的输入由系统模态循环处理。
-pub fn show_menu(hwnd: HWND, paused: bool) -> Option<MenuAction> {
+pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
     unsafe {
         let menu = CreatePopupMenu();
         if menu.is_null() {
@@ -162,6 +168,37 @@ pub fn show_menu(hwnd: HWND, paused: bool) -> Option<MenuAction> {
         AppendMenuW(menu, MF_STRING, ID_BREAK_NOW, break_text.as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TOGGLE_PAUSE, pause_text.as_ptr());
         AppendMenuW(menu, MF_STRING, ID_RESTART, restart_text.as_ptr());
+        AppendMenuW(menu, MF_SEPARATOR, 0, null());
+        // 子菜单挂到父菜单后由父菜单统一释放，失败时只销毁尚未挂接的句柄。
+        for (label, presets, current, base, unit) in [
+            (
+                "工作时长",
+                WORK_PRESETS.as_slice(),
+                cfg.work_minutes,
+                100,
+                "分钟",
+            ),
+            (
+                "休息时长",
+                BREAK_PRESETS.as_slice(),
+                cfg.break_minutes,
+                200,
+                "分钟",
+            ),
+            (
+                "锁定前提醒",
+                WARN_PRESETS.as_slice(),
+                cfg.warn_seconds,
+                300,
+                "秒",
+            ),
+        ] {
+            if !append_presets(menu, label, presets, current, base, unit) {
+                DestroyMenu(menu);
+                return None;
+            }
+        }
+        AppendMenuW(menu, MF_STRING, ID_SETTINGS, wide("设置…").as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_EXIT, exit_text.as_ptr());
 
@@ -187,8 +224,63 @@ pub fn show_menu(hwnd: HWND, paused: bool) -> Option<MenuAction> {
             ID_BREAK_NOW => Some(MenuAction::BreakNow),
             ID_TOGGLE_PAUSE => Some(MenuAction::TogglePause),
             ID_RESTART => Some(MenuAction::Restart),
+            ID_SETTINGS | 199 | 299 | 399 => Some(MenuAction::OpenSettings),
             ID_EXIT => Some(MenuAction::Exit),
+            id if (100..100 + WORK_PRESETS.len()).contains(&id) => {
+                Some(MenuAction::SetWork(WORK_PRESETS[id - 100]))
+            }
+            id if (200..200 + BREAK_PRESETS.len()).contains(&id) => {
+                Some(MenuAction::SetBreak(BREAK_PRESETS[id - 200]))
+            }
+            id if (300..300 + WARN_PRESETS.len()).contains(&id) => {
+                Some(MenuAction::SetWarn(WARN_PRESETS[id - 300]))
+            }
             _ => None,
         }
     }
+}
+
+/// 创建预设子菜单，自定义值显示在末项；父菜单持有成功挂接的子菜单。
+unsafe fn append_presets(
+    parent: HMENU,
+    label: &str,
+    presets: &[u32],
+    current: u32,
+    base: usize,
+    unit: &str,
+) -> bool {
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return false;
+    }
+    for (index, value) in presets.iter().enumerate() {
+        let text = if *value == 0 {
+            "不提醒".to_owned()
+        } else {
+            format!("{value} {unit}")
+        };
+        let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
+        if AppendMenuW(menu, flags, base + index, wide(&text).as_ptr()) == 0 {
+            DestroyMenu(menu);
+            return false;
+        }
+    }
+    let custom = !presets.contains(&current);
+    let text = if custom {
+        format!("自定义（{current} {unit}）")
+    } else {
+        "自定义…".to_owned()
+    };
+    if AppendMenuW(
+        menu,
+        MF_STRING | if custom { MF_CHECKED } else { 0 },
+        base + 99,
+        wide(&text).as_ptr(),
+    ) == 0
+        || AppendMenuW(parent, MF_POPUP, menu as usize, wide(label).as_ptr()) == 0
+    {
+        DestroyMenu(menu);
+        return false;
+    }
+    true
 }

@@ -1,4 +1,15 @@
-//! 将多尺寸 ICO 转为 COFF 资源节，无需外部资源编译器。
+//! 将多尺寸 ICO 和通用控件 manifest 转为 COFF 资源节，无需外部资源编译器。
+
+/// 只声明现代通用控件；DPI 感知仍由程序入口设置。
+const MANIFEST: &[u8] = br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*" />
+    </dependentAssembly>
+  </dependency>
+</assembly>
+"#;
 
 pub struct IconFrame<'a> {
     // ICO 条目的前 12 字节也适用于组图标条目，保留尺寸及颜色信息。
@@ -11,8 +22,8 @@ pub fn parse_ico(ico: &[u8]) -> Result<Vec<IconFrame<'_>>, &'static str> {
         return Err("不是有效的 ICO 文件头");
     }
     let count = read_u16(ico, 4) as usize;
-    // 为组图标保留一条重定位，避免触发 COFF 扩展重定位计数格式。
-    if count == 0 || count >= u16::MAX as usize - 1 || ico.len() < 6 + count * 16 {
+    // 为组图标和 manifest 保留两条重定位，避免触发 COFF 扩展重定位计数格式。
+    if count == 0 || count >= u16::MAX as usize - 2 || ico.len() < 6 + count * 16 {
         return Err("ICO 图像数量或目录长度无效");
     }
     let mut frames = Vec::with_capacity(count);
@@ -34,15 +45,17 @@ pub fn parse_ico(ico: &[u8]) -> Result<Vec<IconFrame<'_>>, &'static str> {
 }
 
 pub fn build_rsrc_coff(frames: &[IconFrame<'_>], machine: u16, reloc_type: u16) -> Vec<u8> {
-    assert!(!frames.is_empty() && frames.len() < u16::MAX as usize - 1);
+    assert!(!frames.is_empty() && frames.len() < u16::MAX as usize - 2);
     let count = frames.len();
     let ids: Vec<u32> = (1..=count as u32).collect();
     let mut section = Vec::new();
 
     // 资源树依次为类型、名称、语言；全部使用整数 ID，目录项按 ID 升序。
-    let root = directory(&mut section, &[3, 14]);
+    let root = directory(&mut section, &[3, 14, 24]);
     let icons = directory(&mut section, &ids);
     let group = directory(&mut section, &[1]);
+    let manifest = directory(&mut section, &[1]);
+    subdirectory(&mut section, root, 2, manifest);
     subdirectory(&mut section, root, 0, icons);
     subdirectory(&mut section, root, 1, group);
     let mut languages = Vec::new();
@@ -53,6 +66,9 @@ pub fn build_rsrc_coff(frames: &[IconFrame<'_>], machine: u16, reloc_type: u16) 
     }
     let language = directory(&mut section, &[0]);
     subdirectory(&mut section, group, 0, language);
+    languages.push(language);
+    let language = directory(&mut section, &[0]);
+    subdirectory(&mut section, manifest, 0, language);
     languages.push(language);
 
     let mut entries = Vec::new();
@@ -74,7 +90,7 @@ pub fn build_rsrc_coff(frames: &[IconFrame<'_>], machine: u16, reloc_type: u16) 
         frames
             .iter()
             .map(|frame| frame.data)
-            .chain([group_data.as_slice()]),
+            .chain([group_data.as_slice(), MANIFEST]),
     ) {
         align_eight(&mut section);
         let offset = u32::try_from(section.len()).expect("图标资源过大");
@@ -198,11 +214,11 @@ mod tests {
             assert_eq!(read_u32(&object, 12), 1);
             assert_eq!(&object[20..28], b".rsrc\0\0\0");
             assert_eq!(read_u32(&object, 56), 0x40000040);
-            assert_eq!(read_u16(&object, 52), 9);
+            assert_eq!(read_u16(&object, 52), 10);
             let relocations = read_u32(&object, 44) as usize;
             let symbols = read_u32(&object, 8) as usize;
-            assert_eq!(symbols, relocations + 9 * 10);
-            for index in 0..9 {
+            assert_eq!(symbols, relocations + 10 * 10);
+            for index in 0..10 {
                 let relocation_offset = relocations + index * 10;
                 let entry = 60 + read_u32(&object, relocation_offset) as usize;
                 assert_eq!(read_u32(&object, relocation_offset + 4), 0);
@@ -235,7 +251,10 @@ mod tests {
         let object = build_rsrc_coff(&frames, 0x8664, 3);
         let section = &object[60..60 + read_u32(&object, 36) as usize];
         let types = children(section, 0);
-        assert_eq!(types.iter().map(|item| item.0).collect::<Vec<_>>(), [3, 14]);
+        assert_eq!(
+            types.iter().map(|item| item.0).collect::<Vec<_>>(),
+            [3, 14, 24]
+        );
         for (kind, names) in types {
             assert_ne!(names & 0x80000000, 0);
             let names = children(section, (names & 0x7fffffff) as usize);
@@ -253,7 +272,7 @@ mod tests {
                 let data = &section[start..start + size];
                 if kind == 3 {
                     assert_eq!(data, frames[index].data);
-                } else {
+                } else if kind == 14 {
                     assert_eq!(read_u16(data, 0), 0);
                     assert_eq!(read_u16(data, 2), 1);
                     assert_eq!(read_u16(data, 4), 8);
@@ -263,8 +282,28 @@ mod tests {
                         assert_eq!(&data[offset..offset + 12], &frame.entry);
                         assert_eq!(read_u16(data, offset + 12), (index + 1) as u16);
                     }
+                } else {
+                    assert_eq!(data, MANIFEST);
                 }
             }
         }
+    }
+
+    #[test]
+    fn manifest_is_embedded_verbatim_with_neutral_language_and_id_one() {
+        let frames = parse_ico(ICO).unwrap();
+        let object = build_rsrc_coff(&frames, 0x8664, 3);
+        let section = &object[60..60 + read_u32(&object, 36) as usize];
+        let types = children(section, 0);
+        let names = children(section, (types[2].1 & 0x7fffffff) as usize);
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0].0, 1);
+        let languages = children(section, (names[0].1 & 0x7fffffff) as usize);
+        assert_eq!(languages.len(), 1);
+        assert_eq!(languages[0].0, 0);
+        let entry = languages[0].1 as usize;
+        let start = read_u32(section, entry) as usize;
+        let size = read_u32(section, entry + 4) as usize;
+        assert_eq!(&section[start..start + size], MANIFEST);
     }
 }

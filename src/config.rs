@@ -9,6 +9,44 @@ pub const BREAK_RANGE: RangeInclusive<u32> = 1..=120;
 /// 提醒秒数的上限。
 pub const WARN_MAX: u32 = 600;
 
+/// 托盘菜单的常用档位。
+pub const WORK_PRESETS: [u32; 5] = [25, 30, 45, 60, 90];
+pub const BREAK_PRESETS: [u32; 4] = [3, 5, 10, 15];
+pub const WARN_PRESETS: [u32; 4] = [0, 30, 60, 120];
+
+/// 只包含本次用户修改的字段，避免把命令行覆盖值写回磁盘。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigPatch {
+    pub work_minutes: Option<u32>,
+    pub break_minutes: Option<u32>,
+    pub warn_seconds: Option<u32>,
+    pub reset_on_unlock: Option<bool>,
+    pub emergency_unlock: Option<bool>,
+}
+
+impl ConfigPatch {
+    fn changes(&self, key: &str) -> bool {
+        match key {
+            "work_minutes" => self.work_minutes.is_some(),
+            "break_minutes" => self.break_minutes.is_some(),
+            "warn_seconds" => self.warn_seconds.is_some(),
+            "reset_on_unlock" => self.reset_on_unlock.is_some(),
+            "emergency_unlock" => self.emergency_unlock.is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// 以磁盘配置为基准合并修改，保留原文件的注释及换行格式。
+pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, String> {
+    let cfg = Config::parse_ini(original).apply_patch(patch)?;
+    Ok(if original.trim_start_matches('\u{feff}').is_empty() {
+        cfg.to_ini_text(original)
+    } else {
+        cfg.render_ini(original, Some(patch))
+    })
+}
+
 /// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
 const INI_KEYS: [&str; 5] = [
     "work_minutes",
@@ -49,6 +87,18 @@ impl Default for Config {
 }
 
 impl Config {
+    /// 校验并应用部分修改；未修改的字段沿用当前配置。
+    pub fn apply_patch(&self, patch: &ConfigPatch) -> Result<Self, String> {
+        let mut cfg = self.with_times(
+            patch.work_minutes.unwrap_or(self.work_minutes),
+            patch.break_minutes.unwrap_or(self.break_minutes),
+            patch.warn_seconds.unwrap_or(self.warn_seconds),
+        )?;
+        cfg.reset_on_unlock = patch.reset_on_unlock.unwrap_or(self.reset_on_unlock);
+        cfg.emergency_unlock = patch.emergency_unlock.unwrap_or(self.emergency_unlock);
+        Ok(cfg)
+    }
+
     /// 在默认值基础上解析 INI 文本，忽略注释、未知键和非法值。
     pub fn parse_ini(text: &str) -> Self {
         let mut cfg = Self::default();
@@ -170,6 +220,10 @@ impl Config {
 
     /// 在原 INI 文本基础上写回全部已知键，保留注释、空行、未知键和原有顺序。
     pub fn to_ini_text(&self, original: &str) -> String {
+        self.render_ini(original, None)
+    }
+
+    fn render_ini(&self, original: &str, patch: Option<&ConfigPatch>) -> String {
         let (bom, text) = match original.strip_prefix('\u{feff}') {
             Some(rest) => ("\u{feff}", rest),
             None => ("", original),
@@ -213,13 +267,14 @@ impl Config {
                 continue;
             };
             let key = key.trim().to_ascii_lowercase();
-            let Some(index) = INI_KEYS
-                .iter()
-                .position(|known| *known == key.as_str())
-            else {
+            let Some(index) = INI_KEYS.iter().position(|known| *known == key.as_str()) else {
                 continue;
             };
             present[index] = true;
+            // 局部保存时连未修改键的格式和原始值也保留，避免归一化改动提醒秒数。
+            if patch.is_some_and(|patch| !patch.changes(&key)) {
+                continue;
+            }
             // 行尾注释原样保留，值与注释之间统一用一个空格分隔。
             let comment = value
                 .find(['#', ';'])
@@ -294,6 +349,96 @@ fn parse_bool(value: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn presets_are_valid_and_include_defaults() {
+        let cfg = Config::default();
+        assert!(WORK_PRESETS.iter().all(|v| WORK_RANGE.contains(v)));
+        assert!(BREAK_PRESETS.iter().all(|v| BREAK_RANGE.contains(v)));
+        assert!(WARN_PRESETS.iter().all(|v| *v <= WARN_MAX));
+        assert!(WORK_PRESETS.contains(&cfg.work_minutes));
+        assert!(BREAK_PRESETS.contains(&cfg.break_minutes));
+        assert!(WARN_PRESETS.contains(&cfg.warn_seconds));
+    }
+
+    #[test]
+    fn merge_uses_disk_values_instead_of_command_line_overrides() {
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\n";
+        let mut runtime = Config::parse_ini(original);
+        runtime.apply_args(["--work".to_owned(), "10".to_owned()].into_iter());
+        let patch = ConfigPatch {
+            break_minutes: Some(10),
+            emergency_unlock: Some(false),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        let saved = Config::parse_ini(&merge_into_ini(original, &patch).unwrap());
+        assert_eq!(applied.work_minutes, 10);
+        assert_eq!(saved.work_minutes, 37);
+        assert_eq!(saved.break_minutes, 10);
+        assert_eq!(saved.warn_seconds, 120);
+        assert!(!saved.reset_on_unlock);
+        assert!(!saved.emergency_unlock);
+    }
+
+    #[test]
+    fn merge_keeps_untouched_raw_values_and_formatting() {
+        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\n";
+        let patch = ConfigPatch {
+            break_minutes: Some(10),
+            ..ConfigPatch::default()
+        };
+        assert_eq!(
+            merge_into_ini(original, &patch).unwrap(),
+            original.replace("break_minutes = 5", "break_minutes = 10")
+        );
+    }
+
+    #[test]
+    fn merge_preserves_bom_crlf_and_comments_and_creates_missing_file() {
+        let patch = ConfigPatch {
+            work_minutes: Some(30),
+            ..ConfigPatch::default()
+        };
+        let original = "\u{feff}# 自定配置\r\nwork_minutes = 37 ; 保留\r\nunknown = yes\r\n";
+        let text = merge_into_ini(original, &patch).unwrap();
+        assert!(
+            text.starts_with("\u{feff}# 自定配置\r\nwork_minutes = 30 ; 保留\r\nunknown = yes\r\n")
+        );
+        assert!(!text.replace("\r\n", "").contains('\n'));
+        let created = merge_into_ini("", &patch).unwrap();
+        assert!(created.contains("# 工作时长"));
+        assert_eq!(Config::parse_ini(&created).work_minutes, 30);
+    }
+
+    #[test]
+    fn patches_reject_out_of_range_values_with_chinese_errors() {
+        for (patch, message) in [
+            (
+                ConfigPatch {
+                    work_minutes: Some(0),
+                    ..ConfigPatch::default()
+                },
+                "工作时长",
+            ),
+            (
+                ConfigPatch {
+                    break_minutes: Some(121),
+                    ..ConfigPatch::default()
+                },
+                "休息时长",
+            ),
+            (
+                ConfigPatch {
+                    warn_seconds: Some(601),
+                    ..ConfigPatch::default()
+                },
+                "提醒秒数",
+            ),
+        ] {
+            assert!(merge_into_ini("", &patch).unwrap_err().contains(message));
+        }
+    }
 
     #[test]
     fn defaults_are_expected() {
