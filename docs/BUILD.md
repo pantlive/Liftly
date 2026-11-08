@@ -99,13 +99,13 @@ cp liftly.ini.example /mnt/d/Liftly/liftly.ini
 
 如果目标位置的 `liftly.exe` 正在运行，复制会因为文件被占用而失败，需要先从托盘菜单退出程序再复制。
 
-从 WSL 启动时，建议用下面的方式让程序脱离当前终端：
+从 WSL 启动时，用 PowerShell 的 `Start-Process` 让程序脱离当前终端：
 
 ```bash
-cmd.exe /c start "" 'D:\Liftly\liftly.exe'
+powershell.exe -NoProfile -Command "Start-Process -FilePath 'D:\Liftly\liftly.exe'"
 ```
 
-不要在前台直接运行 exe，否则终端会一直阻塞到程序退出。
+不要在前台直接运行 exe，否则终端会一直阻塞到程序退出。也不要用 `cmd.exe /c start`：从 WSL 自动化调用时，`start` 可能一直等不到返回，实测出现过卡住 600 秒的情况。`Start-Process` 会把程序交给 Windows 后立即返回。
 
 ## 7. Windows 本机构建
 
@@ -131,7 +131,11 @@ target\release\liftly.exe
 .\liftly.exe --work 1 --break 1 --warn 10
 ```
 
-PowerShell 运行当前目录下的程序需要 `.\` 前缀。从 WSL 启动可用 `cmd.exe /c start "" 'D:\Liftly\liftly.exe' --work 1 --break 1 --warn 10`。
+PowerShell 运行当前目录下的程序需要 `.\` 前缀。从 WSL 启动可用：
+
+```bash
+powershell.exe -NoProfile -Command "Start-Process -FilePath 'D:\Liftly\liftly.exe' -ArgumentList '--work','1','--break','1','--warn','10'"
+```
 
 参数范围：
 
@@ -143,7 +147,54 @@ PowerShell 运行当前目录下的程序需要 `.\` 前缀。从 WSL 启动可�
 
 休息期间同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 可以紧急解锁。此功能需在 `liftly.ini` 中设置 `emergency_unlock = true`（默认开启），命令行参数无法修改此项。Ctrl+Alt+Del 由系统直接处理，是最终兜底。
 
-## 9. 常见问题
+## 9. 真机验证
+
+`cargo test` 只覆盖 `config` 和 `schedule`，交叉编译也只能验证 PE 格式和 DLL 依赖；托盘、提醒弹窗、遮罩、输入钩子和多显示器行为必须在 Windows 真机上确认。
+
+仓库自带一个自动化冒烟脚本，从 WSL 通过 `powershell.exe` 操作 Windows：
+
+```bash
+bash tools/win_smoke.sh
+# 指定其他目标目录
+bash tools/win_smoke.sh /mnt/d/Liftly-verify
+```
+
+默认目标目录是 `D:\Liftly-verify`，脚本只会覆盖该目录下的 `liftly.exe`，不会碰 `D:\Liftly`。运行前请确认：
+
+- 已完成第 5 节的交叉编译；
+- WSL 能调用 `powershell.exe`、`tasklist.exe`、`taskkill.exe`；
+- 没有正在运行的 `liftly.exe`。脚本发现已有实例时会记录后直接退出，不会结束它。
+
+脚本以 `--work 1 --break 1 --warn 10` 启动，全程约 2 分半，其中约 1 分钟会锁住键鼠、覆盖所有显示器。它按顺序检查：
+
+| 步骤 | 检查内容 |
+| --- | --- |
+| a | 没有已运行的 `liftly.exe` |
+| b | 产物复制到目标目录且 sha256 一致；写入辅助 PowerShell 脚本 |
+| b2 | 启动前预检 PowerShell、`Add-Type`/EnumWindows 和显示器枚举 |
+| c | 主实例启动 3 秒后仍存活 |
+| d | 第二个实例停在“站会儿已经在运行”对话框；按 PID 强制结束后主实例不受影响 |
+| e | 约 52 秒时存在可见的 `Liftly.WarnPopup` 窗口 |
+| f | 约 65 秒时 `Liftly.Overlay` 窗口数等于显示器数 |
+| g | 约 130 秒时遮罩和弹窗消失、主进程存活，并记录 WorkingSet |
+| h | 先 `taskkill /PID`，必要时 `/F`，确认主进程退出 |
+
+每一步打印 `PASS` 或 `FAIL`，完整输出同时写入 `.toolchain/winsmoke.log`。脚本在失败或按 Ctrl+C 时会清理自己启动的进程，避免遮罩留在屏幕上。
+
+> 脚本会把辅助 PowerShell 文件写到目标目录的 `.winsmoke-ps/` 下。它不能替代人工检查输入钩子是否真的拦住键鼠。
+
+### 需要人工确认的项目
+
+自动化脚本通过后，再按下面的清单手动过一遍：
+
+- [ ] 托盘图标正常显示；右键菜单的四项（立即休息、暂停/继续计时、重新开始计时、退出）都能工作。当前 exe 未嵌入自定义图标，托盘显示系统图标是预期行为。
+- [ ] 休息中同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 能紧急解锁；把 `emergency_unlock` 设为 `false` 后该组合键无效。
+- [ ] 在 100%/125%/150%/200% 缩放和多显示器（不同 DPI、副屏在左/上方）下，提醒弹窗位于主屏右下角，每个显示器都被遮罩完整覆盖。
+- [ ] 休息中键鼠输入被拦住；切到管理员权限窗口时受 UIPI 限制属于已知限制。
+- [ ] `Ctrl+Alt+Del` 能打开系统安全界面，作为最终兜底。
+- [ ] 锁屏后解锁、睡眠唤醒后，计时按 `reset_on_unlock` 的预期重新开始；休息中锁屏不会让遮罩卡死。
+
+## 10. 常见问题
 
 - **找不到 `cargo-zigbuild`**：确认虚拟环境的 `bin` 目录或 `~/.local/bin` 已在 `PATH` 中；虚拟环境需要先激活。
 - **提示缺少 target**：执行 `rustup target add x86_64-pc-windows-gnu`。
@@ -151,6 +202,6 @@ PowerShell 运行当前目录下的程序需要 `.\` 前缀。从 WSL 启动可�
 - **焦点在管理员权限窗口时钩子拦不到输入**：这是 Windows 的 UIPI 限制，普通权限进程的低级钩子无法拦截更高完整性级别窗口的输入。
 - **复制 exe 失败**：目标 exe 正在运行，文件被占用；先从托盘退出程序再复制。
 
-## 10. 开机自启
+## 11. 开机自启
 
 开机自启见 README 的「开机自启」一节。
