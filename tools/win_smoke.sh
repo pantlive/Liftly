@@ -181,6 +181,16 @@ public static class LiftlyWin {
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int n);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern uint GetDpiForSystem();
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
     public static string[] List() {
         var list = new List<string>();
         EnumWindows(delegate(IntPtr h, IntPtr l) {
@@ -190,7 +200,14 @@ public static class LiftlyWin {
             if (cn.StartsWith("Liftly.") || cn == "#32770") {
                 uint pid;
                 GetWindowThreadProcessId(h, out pid);
-                list.Add(pid.ToString() + "|" + cn + "|" + (IsWindowVisible(h) ? "1" : "0"));
+                RECT rect;
+                GetWindowRect(h, out rect);
+                uint dpi = GetDpiForWindow(h);
+                uint systemDpi = GetDpiForSystem();
+                list.Add(pid.ToString() + "|" + cn + "|" + (IsWindowVisible(h) ? "1" : "0")
+                    + "|" + rect.Left + "|" + rect.Top
+                    + "|" + (rect.Right - rect.Left) + "|" + (rect.Bottom - rect.Top)
+                    + "|" + dpi + "|" + systemDpi);
             }
             return true;
         }, IntPtr.Zero);
@@ -328,6 +345,40 @@ say "== c3. 检查桌面倒计时气泡 Liftly.CountdownBubble =="
 BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
 if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
   pass "c3. 检测到可见的 Liftly.CountdownBubble 窗口"
+  # 新 UI 在 96 DPI 下约 154x56；按窗口或系统 DPI 校验，允许 2px 舍入误差。
+  BUBBLE_LINE="$(printf '%s\n' "$WIN_LIST" | tr -d '\r' | awk -F'|' \
+    -v p="$MAIN_PID" '$1 == p && $2 == "Liftly.CountdownBubble" && $3 == "1" { print; exit }')"
+  if [ -n "$BUBBLE_LINE" ]; then
+    B_WIDTH="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f6)"
+    B_HEIGHT="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f7)"
+    B_DPI="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f8)"
+    B_SYSTEM_DPI="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f9)"
+    size_matches() {
+      local width="$1" height="$2" dpi="${3:-0}"
+      if [ -z "$width" ] || [ -z "$height" ] || [ "$dpi" -le 0 ] 2>/dev/null; then
+        return 1
+      fi
+      local expect_width=$(((154 * dpi + 48) / 96))
+      local expect_height=$(((56 * dpi + 48) / 96))
+      local diff_width=$((width - expect_width))
+      local diff_height=$((height - expect_height))
+      [ "$diff_width" -lt 0 ] && diff_width=$((-diff_width))
+      [ "$diff_height" -lt 0 ] && diff_height=$((-diff_height))
+      [ "$diff_width" -le 2 ] && [ "$diff_height" -le 2 ]
+    }
+    EXPECT_DPI="$B_DPI"
+    if ! size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI"; then
+      EXPECT_DPI="$B_SYSTEM_DPI"
+    fi
+    if size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI" \
+      || size_matches "$B_WIDTH" "$B_HEIGHT" "$B_SYSTEM_DPI"; then
+      pass "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 符合紧凑基准（DPI=$EXPECT_DPI）"
+    else
+      fail "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 不符合紧凑基准（窗口 DPI=$B_DPI，系统 DPI=$B_SYSTEM_DPI）"
+    fi
+  else
+    info "c3. 未能解析气泡窗口矩形，跳过尺寸校验"
+  fi
 else
   fail "c3. 未检测到可见的 Liftly.CountdownBubble 窗口（枚举退出码 $WIN_RC，数量 $BUBBLE_COUNT）"
 fi

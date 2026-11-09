@@ -14,6 +14,34 @@ pub const WORK_PRESETS: [u32; 5] = [25, 30, 45, 60, 90];
 pub const BREAK_PRESETS: [u32; 4] = [3, 5, 10, 15];
 pub const WARN_PRESETS: [u32; 4] = [0, 30, 60, 120];
 
+/// 倒计时气泡的保存位置；`Auto` 使用工作区右上角。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BubblePosition {
+    #[default]
+    Auto,
+    At(i32, i32),
+}
+
+impl BubblePosition {
+    /// 返回供 Windows 定位使用的坐标；自动位置返回 `None`。
+    pub const fn coordinates(self) -> Option<(i32, i32)> {
+        match self {
+            Self::Auto => None,
+            Self::At(x, y) => Some((x, y)),
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case("auto") {
+            return Some(Self::Auto);
+        }
+        let (x, y) = value.split_once(',')?;
+        let x = x.trim().parse::<i32>().ok()?;
+        let y = y.trim().parse::<i32>().ok()?;
+        Some(Self::At(x, y))
+    }
+}
+
 /// 只包含本次用户修改的字段，避免把命令行覆盖值写回磁盘。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ConfigPatch {
@@ -23,6 +51,7 @@ pub struct ConfigPatch {
     pub reset_on_unlock: Option<bool>,
     pub emergency_unlock: Option<bool>,
     pub show_bubble: Option<bool>,
+    pub bubble_position: Option<BubblePosition>,
 }
 
 impl ConfigPatch {
@@ -34,6 +63,7 @@ impl ConfigPatch {
             "reset_on_unlock" => self.reset_on_unlock.is_some(),
             "emergency_unlock" => self.emergency_unlock.is_some(),
             "show_bubble" => self.show_bubble.is_some(),
+            "bubble_position" => self.bubble_position.is_some(),
             _ => false,
         }
     }
@@ -50,22 +80,24 @@ pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, Str
 }
 
 /// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
-const INI_KEYS: [&str; 6] = [
+const INI_KEYS: [&str; 7] = [
     "work_minutes",
     "break_minutes",
     "warn_seconds",
     "reset_on_unlock",
     "emergency_unlock",
     "show_bubble",
+    "bubble_position",
 ];
 
-const INI_COMMENTS: [&str; 6] = [
+const INI_COMMENTS: [&str; 7] = [
     "# 工作时长（分钟），1-600",
     "# 休息时长（分钟），1-120",
     "# 锁定前提醒秒数，0-600；0 表示不提醒",
     "# 锁屏期间暂停计时，解锁或睡眠唤醒后是否重新开始一个完整工作周期",
     "# 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁",
-    "# 是否在桌面右上角显示倒计时气泡",
+    "# 是否显示桌面倒计时气泡",
+    "# 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存",
 ];
 
 /// 运行时配置。
@@ -77,6 +109,7 @@ pub struct Config {
     pub reset_on_unlock: bool,
     pub emergency_unlock: bool,
     pub show_bubble: bool,
+    pub bubble_position: BubblePosition,
 }
 
 impl Default for Config {
@@ -88,6 +121,7 @@ impl Default for Config {
             reset_on_unlock: true,
             emergency_unlock: true,
             show_bubble: true,
+            bubble_position: BubblePosition::Auto,
         }
     }
 }
@@ -103,6 +137,7 @@ impl Config {
         cfg.reset_on_unlock = patch.reset_on_unlock.unwrap_or(self.reset_on_unlock);
         cfg.emergency_unlock = patch.emergency_unlock.unwrap_or(self.emergency_unlock);
         cfg.show_bubble = patch.show_bubble.unwrap_or(self.show_bubble);
+        cfg.bubble_position = patch.bubble_position.unwrap_or(self.bubble_position);
         Ok(cfg)
     }
 
@@ -191,6 +226,11 @@ impl Config {
             "show_bubble" => {
                 if let Some(v) = parse_bool(value) {
                     self.show_bubble = v;
+                }
+            }
+            "bubble_position" => {
+                if let Some(v) = BubblePosition::parse(value) {
+                    self.bubble_position = v;
                 }
             }
             _ => {}
@@ -328,6 +368,10 @@ impl Config {
             "reset_on_unlock" => self.reset_on_unlock.to_string(),
             "emergency_unlock" => self.emergency_unlock.to_string(),
             "show_bubble" => self.show_bubble.to_string(),
+            "bubble_position" => match self.bubble_position {
+                BubblePosition::Auto => "auto".to_owned(),
+                BubblePosition::At(x, y) => format!("{x},{y}"),
+            },
             _ => String::new(),
         }
     }
@@ -376,7 +420,7 @@ mod tests {
 
     #[test]
     fn merge_uses_disk_values_instead_of_command_line_overrides() {
-        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\n";
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = auto\n";
         let mut runtime = Config::parse_ini(original);
         runtime.apply_args(["--work".to_owned(), "10".to_owned()].into_iter());
         let patch = ConfigPatch {
@@ -398,7 +442,7 @@ mod tests {
 
     #[test]
     fn merge_keeps_untouched_raw_values_and_formatting() {
-        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\n";
+        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\nbubble_position=auto\r\n";
         let patch = ConfigPatch {
             break_minutes: Some(10),
             ..ConfigPatch::default()
@@ -464,6 +508,7 @@ mod tests {
         assert!(cfg.reset_on_unlock);
         assert!(cfg.emergency_unlock);
         assert!(cfg.show_bubble);
+        assert_eq!(cfg.bubble_position, BubblePosition::Auto);
     }
 
     #[test]
@@ -476,7 +521,8 @@ mod tests {
              warn_seconds = 15 ; 行尾注释\n\
              reset_on_unlock = false\n\
              emergency_unlock = no\n\
-             show_bubble = off\n",
+             show_bubble = off\n\
+             bubble_position = 1200,80\n",
         );
         assert_eq!(cfg.work_minutes, 30);
         assert_eq!(cfg.break_minutes, 10);
@@ -484,6 +530,7 @@ mod tests {
         assert!(!cfg.reset_on_unlock);
         assert!(!cfg.emergency_unlock);
         assert!(!cfg.show_bubble);
+        assert_eq!(cfg.bubble_position, BubblePosition::At(1200, 80));
     }
 
     #[test]
@@ -495,7 +542,8 @@ mod tests {
              warn_seconds = abc\n\
              reset_on_unlock = maybe\n\
              emergency_unlock = 2\n\
-             show_bubble = sometimes\n",
+             show_bubble = sometimes\n\
+             bubble_position = 12,abc\n",
         );
         assert_eq!(cfg, Config::default());
     }
@@ -513,8 +561,97 @@ mod tests {
     }
 
     #[test]
+    fn parses_bubble_position_and_ignores_invalid_values() {
+        assert_eq!(Config::default().bubble_position, BubblePosition::Auto);
+        assert_eq!(BubblePosition::Auto.coordinates(), None);
+        assert_eq!(BubblePosition::At(-12, 34).coordinates(), Some((-12, 34)));
+        for (value, expected) in [
+            ("auto", BubblePosition::Auto),
+            ("AUTO", BubblePosition::Auto),
+            ("1200,80", BubblePosition::At(1200, 80)),
+            ("  -1920, 100 ; 副屏 ", BubblePosition::At(-1920, 100)),
+        ] {
+            let cfg = Config::parse_ini(&format!("bubble_position = {value}\n"));
+            assert_eq!(cfg.bubble_position, expected, "value={value}");
+        }
+        for value in ["", "auto,1", "1,2,3", "12,abc", "2147483648,0"] {
+            let cfg = Config::parse_ini(&format!("bubble_position = {value}\n"));
+            assert_eq!(cfg.bubble_position, BubblePosition::Auto, "value={value}");
+        }
+    }
+
+    #[test]
+    fn saving_bubble_position_only_touches_that_key() {
+        let original = "work_minutes=37\nbreak_minutes = 5\nwarn_seconds=120\nreset_on_unlock=no\nemergency_unlock=on\nshow_bubble=yes\nbubble_position=auto\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            bubble_position: Some(BubblePosition::At(1200, 80)),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        assert_eq!(applied.bubble_position, BubblePosition::At(1200, 80));
+        assert_eq!(applied.work_minutes, 37);
+
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert_eq!(
+            saved_text,
+            original.replace("bubble_position=auto", "bubble_position = 1200,80")
+        );
+        assert_eq!(Config::parse_ini(&saved_text), applied);
+    }
+
+    #[test]
+    fn saving_other_settings_preserves_saved_bubble_position() {
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = 1200,80\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            work_minutes: Some(30),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        assert_eq!(applied.bubble_position, BubblePosition::At(1200, 80));
+
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert!(saved_text.contains("work_minutes = 30\n"));
+        assert!(saved_text.contains("bubble_position = 1200,80\n"));
+        assert_eq!(Config::parse_ini(&saved_text), applied);
+    }
+
+    #[test]
+    fn saving_position_upgrades_old_ini_without_rewriting_existing_settings() {
+        let original = "\u{feff}# 旧版配置\r\nWORK_MINUTES=37\r\nbreak_minutes=5\r\nwarn_seconds=120\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\n";
+        let patch = ConfigPatch {
+            bubble_position: Some(BubblePosition::At(-1200, -80)),
+            ..ConfigPatch::default()
+        };
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        // 新位置键可以追加到旧文件，已有 BOM、换行、键名、别名和时长均保留。
+        assert!(saved_text.starts_with(original));
+        assert!(saved_text.ends_with("bubble_position = -1200,-80\r\n"));
+        let cfg = Config::parse_ini(&saved_text);
+        assert_eq!(cfg.bubble_position, BubblePosition::At(-1200, -80));
+        assert_eq!(cfg.work_minutes, 37);
+        assert_eq!(cfg.warn_seconds, 120);
+        assert!(!cfg.reset_on_unlock);
+    }
+
+    #[test]
+    fn resetting_bubble_position_to_auto_is_saved() {
+        let original = "work_minutes = 37\nbubble_position = 1200,80\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            bubble_position: Some(BubblePosition::Auto),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert!(saved_text.contains("bubble_position = auto\n"));
+        assert_eq!(Config::parse_ini(&saved_text), applied);
+    }
+
+    #[test]
     fn patching_bubble_keeps_durations_and_saves_only_that_key() {
-        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\n";
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = auto\n";
         let runtime = Config::parse_ini(original);
         let patch = ConfigPatch {
             show_bubble: Some(false),
@@ -669,8 +806,10 @@ mod tests {
 
         assert!(text.contains("# 休息时长（分钟），1-120"));
         assert!(text.contains("break_minutes = 5"));
-        assert!(text.contains("# 是否在桌面右上角显示倒计时气泡"));
+        assert!(text.contains("# 是否显示桌面倒计时气泡"));
         assert!(text.contains("show_bubble = true"));
+        assert!(text.contains("# 气泡位置：auto（工作区右上角）或 x,y"));
+        assert!(text.contains("bubble_position = auto"));
         assert!(text.ends_with('\n'));
         assert_eq!(Config::parse_ini(&text), cfg);
     }
@@ -718,8 +857,10 @@ mod tests {
             reset_on_unlock: false,
             emergency_unlock: false,
             show_bubble: true,
+            bubble_position: BubblePosition::At(-500, 20),
         };
         let text = cfg.to_ini_text("work_minutes = 10\nunknown = value # 注释\n");
+        assert!(text.contains("bubble_position = -500,20"));
         assert_eq!(Config::parse_ini(&text), cfg);
     }
 }
