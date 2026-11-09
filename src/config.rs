@@ -22,6 +22,7 @@ pub struct ConfigPatch {
     pub warn_seconds: Option<u32>,
     pub reset_on_unlock: Option<bool>,
     pub emergency_unlock: Option<bool>,
+    pub show_bubble: Option<bool>,
 }
 
 impl ConfigPatch {
@@ -32,6 +33,7 @@ impl ConfigPatch {
             "warn_seconds" => self.warn_seconds.is_some(),
             "reset_on_unlock" => self.reset_on_unlock.is_some(),
             "emergency_unlock" => self.emergency_unlock.is_some(),
+            "show_bubble" => self.show_bubble.is_some(),
             _ => false,
         }
     }
@@ -48,20 +50,22 @@ pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, Str
 }
 
 /// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
-const INI_KEYS: [&str; 5] = [
+const INI_KEYS: [&str; 6] = [
     "work_minutes",
     "break_minutes",
     "warn_seconds",
     "reset_on_unlock",
     "emergency_unlock",
+    "show_bubble",
 ];
 
-const INI_COMMENTS: [&str; 5] = [
+const INI_COMMENTS: [&str; 6] = [
     "# 工作时长（分钟），1-600",
     "# 休息时长（分钟），1-120",
     "# 锁定前提醒秒数，0-600；0 表示不提醒",
     "# 锁屏期间暂停计时，解锁或睡眠唤醒后是否重新开始一个完整工作周期",
     "# 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁",
+    "# 是否在桌面右上角显示倒计时气泡",
 ];
 
 /// 运行时配置。
@@ -72,6 +76,7 @@ pub struct Config {
     pub warn_seconds: u32,
     pub reset_on_unlock: bool,
     pub emergency_unlock: bool,
+    pub show_bubble: bool,
 }
 
 impl Default for Config {
@@ -82,6 +87,7 @@ impl Default for Config {
             warn_seconds: 60,
             reset_on_unlock: true,
             emergency_unlock: true,
+            show_bubble: true,
         }
     }
 }
@@ -96,6 +102,7 @@ impl Config {
         )?;
         cfg.reset_on_unlock = patch.reset_on_unlock.unwrap_or(self.reset_on_unlock);
         cfg.emergency_unlock = patch.emergency_unlock.unwrap_or(self.emergency_unlock);
+        cfg.show_bubble = patch.show_bubble.unwrap_or(self.show_bubble);
         Ok(cfg)
     }
 
@@ -181,6 +188,11 @@ impl Config {
                     self.emergency_unlock = v;
                 }
             }
+            "show_bubble" => {
+                if let Some(v) = parse_bool(value) {
+                    self.show_bubble = v;
+                }
+            }
             _ => {}
         }
     }
@@ -257,7 +269,7 @@ impl Config {
             lines.pop();
         }
 
-        let mut present = [false; 5];
+        let mut present = [false; INI_KEYS.len()];
         for line in &mut lines {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with(';') {
@@ -315,6 +327,7 @@ impl Config {
             "warn_seconds" => self.warn_seconds.to_string(),
             "reset_on_unlock" => self.reset_on_unlock.to_string(),
             "emergency_unlock" => self.emergency_unlock.to_string(),
+            "show_bubble" => self.show_bubble.to_string(),
             _ => String::new(),
         }
     }
@@ -363,12 +376,13 @@ mod tests {
 
     #[test]
     fn merge_uses_disk_values_instead_of_command_line_overrides() {
-        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\n";
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\n";
         let mut runtime = Config::parse_ini(original);
         runtime.apply_args(["--work".to_owned(), "10".to_owned()].into_iter());
         let patch = ConfigPatch {
             break_minutes: Some(10),
             emergency_unlock: Some(false),
+            show_bubble: Some(false),
             ..ConfigPatch::default()
         };
         let applied = runtime.apply_patch(&patch).unwrap();
@@ -379,11 +393,12 @@ mod tests {
         assert_eq!(saved.warn_seconds, 120);
         assert!(!saved.reset_on_unlock);
         assert!(!saved.emergency_unlock);
+        assert!(!saved.show_bubble);
     }
 
     #[test]
     fn merge_keeps_untouched_raw_values_and_formatting() {
-        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\n";
+        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\n";
         let patch = ConfigPatch {
             break_minutes: Some(10),
             ..ConfigPatch::default()
@@ -448,6 +463,7 @@ mod tests {
         assert_eq!(cfg.warn_seconds, 60);
         assert!(cfg.reset_on_unlock);
         assert!(cfg.emergency_unlock);
+        assert!(cfg.show_bubble);
     }
 
     #[test]
@@ -459,13 +475,15 @@ mod tests {
              break_minutes=10\n\
              warn_seconds = 15 ; 行尾注释\n\
              reset_on_unlock = false\n\
-             emergency_unlock = no\n",
+             emergency_unlock = no\n\
+             show_bubble = off\n",
         );
         assert_eq!(cfg.work_minutes, 30);
         assert_eq!(cfg.break_minutes, 10);
         assert_eq!(cfg.warn_seconds, 15);
         assert!(!cfg.reset_on_unlock);
         assert!(!cfg.emergency_unlock);
+        assert!(!cfg.show_bubble);
     }
 
     #[test]
@@ -476,7 +494,8 @@ mod tests {
              break_minutes = 121\n\
              warn_seconds = abc\n\
              reset_on_unlock = maybe\n\
-             emergency_unlock = 2\n",
+             emergency_unlock = 2\n\
+             show_bubble = sometimes\n",
         );
         assert_eq!(cfg, Config::default());
     }
@@ -485,10 +504,34 @@ mod tests {
     fn accepts_boolean_aliases() {
         let cfg = Config::parse_ini(
             "reset_on_unlock = 0\n\
-             emergency_unlock = YES\n",
+             emergency_unlock = YES\n\
+             show_bubble = 0\n",
         );
         assert!(!cfg.reset_on_unlock);
         assert!(cfg.emergency_unlock);
+        assert!(!cfg.show_bubble);
+    }
+
+    #[test]
+    fn patching_bubble_keeps_durations_and_saves_only_that_key() {
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            show_bubble: Some(false),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        assert_eq!(applied.work_minutes, 37);
+        assert_eq!(applied.break_minutes, 5);
+        assert_eq!(applied.warn_seconds, 120);
+        assert!(!applied.reset_on_unlock);
+        assert!(applied.emergency_unlock);
+        assert!(!applied.show_bubble);
+
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert!(saved_text.contains("show_bubble = false\n"));
+        assert!(saved_text.contains("work_minutes = 37\n"));
+        assert_eq!(Config::parse_ini(&saved_text), applied);
     }
 
     #[test]
@@ -626,6 +669,8 @@ mod tests {
 
         assert!(text.contains("# 休息时长（分钟），1-120"));
         assert!(text.contains("break_minutes = 5"));
+        assert!(text.contains("# 是否在桌面右上角显示倒计时气泡"));
+        assert!(text.contains("show_bubble = true"));
         assert!(text.ends_with('\n'));
         assert_eq!(Config::parse_ini(&text), cfg);
     }
@@ -672,6 +717,7 @@ mod tests {
             warn_seconds: 59,
             reset_on_unlock: false,
             emergency_unlock: false,
+            show_bubble: true,
         };
         let text = cfg.to_ini_text("work_minutes = 10\nunknown = value # 注释\n");
         assert_eq!(Config::parse_ini(&text), cfg);

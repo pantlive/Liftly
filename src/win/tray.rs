@@ -22,6 +22,7 @@ pub enum MenuAction {
     BreakNow,
     TogglePause,
     Restart,
+    ToggleBubble,
     SetWork(u32),
     SetBreak(u32),
     SetWarn(u32),
@@ -34,6 +35,7 @@ const ID_TOGGLE_PAUSE: usize = 2;
 const ID_RESTART: usize = 3;
 const ID_SETTINGS: usize = 4;
 const ID_EXIT: usize = 5;
+const ID_TOGGLE_BUBBLE: usize = 6;
 
 pub struct Tray {
     nid: NOTIFYICONDATAW,
@@ -173,6 +175,13 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
         AppendMenuW(menu, MF_STRING, ID_BREAK_NOW, break_text.as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TOGGLE_PAUSE, pause_text.as_ptr());
         AppendMenuW(menu, MF_STRING, ID_RESTART, restart_text.as_ptr());
+        let bubble_flags = MF_STRING | if cfg.show_bubble { MF_CHECKED } else { 0 };
+        AppendMenuW(
+            menu,
+            bubble_flags,
+            ID_TOGGLE_BUBBLE,
+            wide("显示桌面倒计时").as_ptr(),
+        );
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         // 子菜单挂到父菜单后由父菜单统一释放，失败时只销毁尚未挂接的句柄。
         for (label, presets, current, base, unit) in [
@@ -229,6 +238,7 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             ID_BREAK_NOW => Some(MenuAction::BreakNow),
             ID_TOGGLE_PAUSE => Some(MenuAction::TogglePause),
             ID_RESTART => Some(MenuAction::Restart),
+            ID_TOGGLE_BUBBLE => Some(MenuAction::ToggleBubble),
             ID_SETTINGS | 199 | 299 | 399 => Some(MenuAction::OpenSettings),
             ID_EXIT => Some(MenuAction::Exit),
             id if (100..100 + WORK_PRESETS.len()).contains(&id) => {

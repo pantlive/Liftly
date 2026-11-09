@@ -6,6 +6,7 @@
 #
 # 默认目标目录是 /mnt/d/Liftly-verify，不会覆盖用户自己的 D:\Liftly。
 # 全过程约 2 分半，其中约 1 分钟会锁住键鼠（工作 1 分钟 + 休息 1 分钟）。
+# 同时检查桌面倒计时气泡在工作时显示、休息时隐藏、结束后恢复。
 # 输出同时写入 .toolchain/winsmoke.log。
 #
 # 每个 Windows 调用都带 timeout 和 </dev/null，避免 WSL 自动化调用卡死。
@@ -320,6 +321,18 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# c3. 启动约 3 秒：桌面倒计时气泡应已显示
+# ---------------------------------------------------------------------------
+say ""
+say "== c3. 检查桌面倒计时气泡 Liftly.CountdownBubble =="
+BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
+if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
+  pass "c3. 检测到可见的 Liftly.CountdownBubble 窗口"
+else
+  fail "c3. 未检测到可见的 Liftly.CountdownBubble 窗口（枚举退出码 $WIN_RC，数量 $BUBBLE_COUNT）"
+fi
+
+# ---------------------------------------------------------------------------
 # d. 第二个实例：应弹“已经在运行”对话框，确认存在后按 PID 结束
 # ---------------------------------------------------------------------------
 say ""
@@ -363,6 +376,12 @@ if [ "$WIN_RC" -eq 0 ] && [ "$POPUP_COUNT" -ge 1 ]; then
 else
   fail "e. 未检测到可见的 Liftly.WarnPopup 窗口（枚举退出码 $WIN_RC，数量 $POPUP_COUNT）"
 fi
+BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
+if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
+  pass "e. 提醒阶段桌面倒计时气泡仍然可见"
+else
+  fail "e. 提醒阶段桌面倒计时气泡不可见（枚举退出码 $WIN_RC，数量 $BUBBLE_COUNT）"
+fi
 
 # ---------------------------------------------------------------------------
 # f. 约 65 秒：每个显示器一个遮罩
@@ -381,6 +400,12 @@ if [ -n "$MONITORS" ] && [ "$MONITORS" -ge 1 ] && [ "$WIN_RC" -eq 0 ] && [ "$OVE
 else
   fail "f. 遮罩窗口数 $OVERLAYS 与显示器数 ${MONITORS:-未知} 不一致（枚举退出码 $WIN_RC）"
 fi
+BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
+if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -eq 0 ]; then
+  pass "f. 休息时桌面倒计时气泡已隐藏"
+else
+  fail "f. 休息时仍有桌面倒计时气泡（数量 $BUBBLE_COUNT，枚举退出码 $WIN_RC）"
+fi
 
 # ---------------------------------------------------------------------------
 # g. 约 130 秒：休息结束，遮罩消失，主进程仍存活
@@ -393,10 +418,16 @@ WIN_RC=$?
 printf '%s\n' "$WIN_LIST" | tr -d '\r'
 OVERLAYS="$(count_class "$MAIN_PID" "Liftly.Overlay" "$WIN_LIST")"
 POPUP_COUNT="$(count_class "$MAIN_PID" "Liftly.WarnPopup" "$WIN_LIST")"
+BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
 if [ "$WIN_RC" -eq 0 ] && [ "$OVERLAYS" -eq 0 ] && [ "$POPUP_COUNT" -eq 0 ]; then
   pass "g. 遮罩和提醒弹窗均已消失（Overlay=$OVERLAYS, Popup=$POPUP_COUNT）"
 else
   fail "g. 仍有残留窗口（Overlay=$OVERLAYS, Popup=$POPUP_COUNT, 枚举退出码 $WIN_RC）"
+fi
+if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
+  pass "g. 休息结束后桌面倒计时气泡已恢复"
+else
+  fail "g. 休息结束后桌面倒计时气泡未恢复（数量 $BUBBLE_COUNT，枚举退出码 $WIN_RC）"
 fi
 if proc_alive "$MAIN_PID"; then
   pass "g. 主实例仍存活"
