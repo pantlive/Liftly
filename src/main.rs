@@ -1,6 +1,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(any(windows, test))]
+mod autostart;
+#[cfg(any(windows, test))]
 mod config;
 #[cfg(any(windows, test))]
 mod schedule;

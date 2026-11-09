@@ -217,6 +217,7 @@ bash tools/win_smoke.sh /mnt/d/Liftly-verify
 - [ ] 休息中键鼠输入被拦住；切到管理员权限窗口时受 UIPI 限制属于已知限制。
 - [ ] `Ctrl+Alt+Del` 能打开系统安全界面，作为最终兜底。
 - [ ] 锁屏后解锁、睡眠唤醒后，计时按 `reset_on_unlock` 的预期重新开始；倒计时气泡在锁屏时隐藏、解锁后恢复；休息中锁屏不会让遮罩卡死。
+- [ ] 设置中勾选“开机自启动”并保存后，注册表 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 出现 `Liftly`，值为带引号的 exe 路径加 `--autostart`；取消勾选后该值被删除。重新打开设置时勾选状态与注册表一致。只改该开关时计时不重置、`liftly.ini` 不变；写入失败时有中文提示且设置窗口保持打开。注销再登录后能自启。若与旧的启动文件夹快捷方式同时存在，第二个实例不弹出“站会儿已经在运行”。
 
 ## 10. 常见问题
 
@@ -228,4 +229,8 @@ bash tools/win_smoke.sh /mnt/d/Liftly-verify
 
 ## 11. 开机自启
 
-开机自启见 README 的「开机自启」一节。
+在设置窗口勾选“开机自启动”并保存。程序把当前 `liftly.exe` 的路径写入当前用户的注册表 Run 项（`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 下的 `Liftly`，值为带引号的 exe 路径加 `--autostart`），不需要管理员权限，也不写入 `liftly.ini`。
+
+移动 exe 后要重新勾选一次以更新路径。如果以前在“启动”文件夹放过快捷方式，建议删掉；即使不删，带 `--autostart` 的第二个实例也会静默退出，不再弹出“站会儿已经在运行”。
+
+详见 README 的「开机自启」一节。

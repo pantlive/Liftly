@@ -9,7 +9,7 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Controls::{BST_CHECKED, EM_SETLIMITTEXT};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use super::wide;
+use super::{autostart, wide};
 use crate::config::{Config, ConfigPatch};
 
 const ID_WORK: i32 = 1001;
@@ -17,11 +17,13 @@ const ID_BREAK: i32 = 1002;
 const ID_WARN: i32 = 1003;
 const ID_RESET: i32 = 1004;
 const ID_EMERGENCY: i32 = 1005;
+const ID_AUTOSTART: i32 = 1006;
 
 static SETTINGS_HWND: AtomicPtr<c_void> = AtomicPtr::new(null_mut());
 
 struct DialogState {
     initial: Config,
+    autostart_initial: bool,
     patch: Option<ConfigPatch>,
 }
 
@@ -61,6 +63,7 @@ pub fn show(owner: HWND, cfg: &Config) -> Option<ConfigPatch> {
     let template = dialog_template();
     let mut state = DialogState {
         initial: cfg.clone(),
+        autostart_initial: autostart::is_enabled(),
         patch: None,
     };
     let result = unsafe {
@@ -102,6 +105,7 @@ unsafe extern "system" fn dialog_proc(
             for (id, checked) in [
                 (ID_RESET, state.initial.reset_on_unlock),
                 (ID_EMERGENCY, state.initial.emergency_unlock),
+                (ID_AUTOSTART, state.autostart_initial),
             ] {
                 SendDlgItemMessageW(hwnd, id, BM_SETCHECK, usize::from(checked), 0);
             }
@@ -117,8 +121,30 @@ unsafe extern "system" fn dialog_proc(
                     // 校验提示也会运行消息循环，弹出前不持有状态的可变引用。
                     match read_patch(hwnd, &(*state_ptr).initial) {
                         Ok(patch) => {
-                            (*state_ptr).patch = (patch != ConfigPatch::default()).then_some(patch);
-                            EndDialog(hwnd, IDOK as isize);
+                            let checked =
+                                SendDlgItemMessageW(hwnd, ID_AUTOSTART, BM_GETCHECK, 0, 0)
+                                    == BST_CHECKED as isize;
+                            let autostart_ok = if checked != (*state_ptr).autostart_initial {
+                                match autostart::set_enabled(checked) {
+                                    Ok(()) => true,
+                                    Err(message) => {
+                                        MessageBoxW(
+                                            hwnd,
+                                            wide(&format!("开机自启动设置失败：{message}")).as_ptr(),
+                                            wide("设置提示").as_ptr(),
+                                            MB_OK | MB_ICONWARNING,
+                                        );
+                                        false
+                                    }
+                                }
+                            } else {
+                                true
+                            };
+                            if autostart_ok {
+                                (*state_ptr).patch =
+                                    (patch != ConfigPatch::default()).then_some(patch);
+                                EndDialog(hwnd, IDOK as isize);
+                            }
                         }
                         Err(message) => {
                             MessageBoxW(
@@ -189,7 +215,7 @@ fn dialog_template() -> Vec<u32> {
         | DS_CENTER as u32;
     bytes.extend_from_slice(&style.to_le_bytes());
     bytes.extend_from_slice(&0_u32.to_le_bytes());
-    words(&mut bytes, &[13, 0, 0, 330, 168, 0, 0]);
+    words(&mut bytes, &[14, 0, 0, 330, 168, 0, 0]);
     string(&mut bytes, "站会儿设置");
     words(&mut bytes, &[9]);
     string(&mut bytes, "Microsoft YaHei UI");
@@ -223,6 +249,14 @@ fn dialog_template() -> Vec<u32> {
         "紧急解锁",
         ID_EMERGENCY as u16,
         [170, 96, 145, 16],
+        WS_TABSTOP | BS_AUTOCHECKBOX as u32,
+    );
+    control(
+        &mut bytes,
+        0x80,
+        "开机自启动",
+        ID_AUTOSTART as u16,
+        [12, 116, 145, 16],
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
     control(
@@ -307,7 +341,7 @@ mod tests {
         let style = dword(&bytes, 0);
         assert_ne!(style & DS_SETFONT as u32, 0);
         assert_ne!(style & DS_MODALFRAME as u32, 0);
-        assert_eq!(word(&bytes, 8), 13);
+        assert_eq!(word(&bytes, 8), 14);
         assert_eq!(word(&bytes, 18), 0);
         assert_eq!(word(&bytes, 20), 0);
         let mut cursor = 22;
@@ -336,7 +370,7 @@ mod tests {
                 assert_eq!(class, 0x81);
                 assert_ne!(style & ES_NUMBER as u32, 0);
             }
-            if [ID_RESET, ID_EMERGENCY].contains(&id) {
+            if [ID_RESET, ID_EMERGENCY, ID_AUTOSTART].contains(&id) {
                 assert_eq!(class, 0x80);
                 assert_eq!(style & 0xf, BS_AUTOCHECKBOX as u32);
             }
@@ -356,6 +390,7 @@ mod tests {
                 ID_WARN,
                 ID_RESET,
                 ID_EMERGENCY,
+                ID_AUTOSTART,
                 IDOK,
                 IDCANCEL
             ]
