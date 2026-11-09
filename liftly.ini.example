@@ -17,5 +17,8 @@ reset_on_unlock = true
 # 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁
 emergency_unlock = true
 
-# 是否在桌面右上角显示倒计时气泡
+# 是否显示桌面倒计时气泡
 show_bubble = true
+
+# 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存
+bubble_position = auto

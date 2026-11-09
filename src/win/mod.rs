@@ -23,7 +23,7 @@ use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::{merge_into_ini, Config, ConfigPatch};
+use crate::config::{merge_into_ini, BubblePosition, Config, ConfigPatch};
 use crate::schedule::{Event, Phase, Schedule};
 use crate::view;
 
@@ -35,6 +35,7 @@ const STARTUP_RETRY_LIMIT: u32 = 10;
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_EMERGENCY_UNLOCK: u32 = WM_APP + 2;
+pub const WM_BUBBLE_MOVED: u32 = WM_APP + 3;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
@@ -132,7 +133,7 @@ pub fn run() {
             tray: tray::Tray::new(hwnd, "站会儿"),
             overlay: overlay::Overlay::new(),
             popup: popup::Popup::new(),
-            bubble: bubble::Bubble::new(),
+            bubble: bubble::Bubble::new(hwnd),
             hooks: None,
             wts_registered: false,
             away: false,
@@ -417,8 +418,21 @@ impl App {
         }
         let remaining = self.schedule.remaining_ms(now);
         let paused = self.schedule.phase() == Phase::Paused;
+        let saved = self.cfg.bubble_position.coordinates();
         // 创建失败时静默降级，核心计时和托盘功能不受影响。
-        self.bubble.show(remaining, paused);
+        self.bubble.show(remaining, paused, saved);
+    }
+
+    /// 拖动结束或显示器变化后，把窗口实际左上角写回 INI；不走 apply_patch，避免重置计时。
+    fn save_bubble_position(&mut self, x: i32, y: i32) {
+        if self.cfg.bubble_position == BubblePosition::At(x, y) {
+            return;
+        }
+        self.cfg.bubble_position = BubblePosition::At(x, y);
+        self.save_patch(&ConfigPatch {
+            bubble_position: Some(BubblePosition::At(x, y)),
+            ..ConfigPatch::default()
+        });
     }
 
     fn arm_timer(&mut self, now: u64) {
@@ -593,6 +607,8 @@ impl App {
             self.overlay.rebuild(deadline, self.cfg.emergency_unlock);
         }
         self.sync_bubble(now_ms());
+        // 显示器拔插或缩放变化后，尺寸和位置可能越界；同步时不会移动已有窗口。
+        self.bubble.reclamp();
     }
 
     fn stop_break_resources(&mut self) {
@@ -651,8 +667,17 @@ impl App {
                 self.emergency_unlock();
                 WndOutcome::Handled(0)
             }
+            WM_BUBBLE_MOVED => {
+                self.save_bubble_position(wparam as i32, lparam as i32);
+                WndOutcome::Handled(0)
+            }
             WM_DISPLAYCHANGE => {
                 self.on_display_change();
+                WndOutcome::Handled(0)
+            }
+            WM_SETTINGCHANGE if wparam == SPI_SETWORKAREA as usize => {
+                // 任务栏位置或占用区域改变时，分辨率可能不变，仍需重新夹取。
+                self.bubble.reclamp();
                 WndOutcome::Handled(0)
             }
             WM_WTSSESSION_CHANGE => {
