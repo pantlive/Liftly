@@ -186,7 +186,7 @@ public static class LiftlyWin {
             var sb = new StringBuilder(256);
             GetClassName(h, sb, 256);
             string cn = sb.ToString();
-            if (cn.StartsWith("Liftly.")) {
+            if (cn.StartsWith("Liftly.") || cn == "#32770") {
                 uint pid;
                 GetWindowThreadProcessId(h, out pid);
                 list.Add(pid.ToString() + "|" + cn + "|" + (IsWindowVisible(h) ? "1" : "0"));
@@ -302,6 +302,21 @@ else
   fail "c. 3 秒后主实例已退出"
   MAIN_PID=""
   exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# c2. 启动 3 秒后不应残留可见的启动错误对话框（#32770）
+# ---------------------------------------------------------------------------
+say ""
+say "== c2. 检查主实例没有启动错误对话框 =="
+WIN_LIST="$(ps_run 25 "$PS_LIST_WIN")"
+WIN_RC=$?
+printf '%s\n' "$WIN_LIST" | tr -d '\r'
+STARTUP_DIALOGS="$(count_class "$MAIN_PID" "#32770" "$WIN_LIST")"
+if [ "$WIN_RC" -eq 0 ] && [ "$STARTUP_DIALOGS" -eq 0 ]; then
+  pass "c2. 主实例没有可见的启动错误对话框"
+else
+  fail "c2. 检测到可见的启动错误对话框（数量 $STARTUP_DIALOGS，枚举退出码 $WIN_RC）"
 fi
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,11 @@ impl Tray {
         self.added = unsafe { Shell_NotifyIconW(NIM_ADD, &self.nid) != 0 };
     }
 
+    /// 托盘图标当前是否已成功添加；启动阶段据此决定是否重试。
+    pub fn is_added(&self) -> bool {
+        self.added
+    }
+
     /// Explorer 重启后重新添加图标。
     pub fn readd(&mut self) {
         self.added = false;
@@ -98,9 +103,11 @@ impl Tray {
         }
     }
 
-    pub fn balloon(&mut self, title: &str, text: &str) {
+    /// 返回气泡是否提交成功。通知失败不代表图标已丢失，不能据此清除 `added`；
+    /// 是否重试由调用方决定。
+    pub fn balloon(&mut self, title: &str, text: &str) -> bool {
         if !self.added {
-            return;
+            return false;
         }
         copy_wide(&mut self.nid.szInfoTitle, title);
         copy_wide(&mut self.nid.szInfo, text);
@@ -108,9 +115,7 @@ impl Tray {
         self.nid.uFlags = NIF_INFO;
         let ok = unsafe { Shell_NotifyIconW(NIM_MODIFY, &self.nid) } != 0;
         self.nid.uFlags = base_flags();
-        if !ok {
-            self.added = false;
-        }
+        ok
     }
 
     pub fn remove(&mut self) {

@@ -28,6 +28,8 @@ use crate::schedule::{Event, Phase, Schedule};
 const MUTEX_NAME: &str = "Local\\Liftly.SingleInstance";
 const WINDOW_CLASS: &str = "Liftly.HiddenWindow";
 const TIMER_ID: usize = 1;
+const STARTUP_TIMER_ID: usize = 2;
+const STARTUP_RETRY_LIMIT: u32 = 10;
 
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_EMERGENCY_UNLOCK: u32 = WM_APP + 2;
@@ -44,8 +46,30 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+fn message_box(text: &str, flags: u32) {
+    unsafe {
+        let title = wide("站会儿");
+        let text = wide(text);
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags);
+    }
+}
+
+/// GUI 子系统没有控制台；panic 时至少给用户一个可见的中文提示。
+fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        message_box(
+            "程序内部错误，即将退出。请重新启动站会儿；若问题持续出现，请查看 README 的常见问题。",
+            MB_OK | MB_ICONERROR,
+        );
+        previous(info);
+    }));
+}
+
 /// 程序入口。
 pub fn run() {
+    install_panic_hook();
+
     unsafe {
         if is_second_instance() {
             let text = wide("站会儿已经在运行");
@@ -63,7 +87,10 @@ pub fn run() {
 
         let cfg = load_config();
         let hinstance = GetModuleHandleW(std::ptr::null());
-        let _main_icons = register_main_class(hinstance);
+        // 图标必须活到窗口类注销之后，失败时由 None 提前结束启动。
+        let Some(_main_icons) = register_main_class(hinstance) else {
+            return;
+        };
 
         let class = wide(WINDOW_CLASS);
         let title = wide("站会儿");
@@ -82,6 +109,11 @@ pub fn run() {
             std::ptr::null(),
         );
         if hwnd.is_null() {
+            let code = GetLastError();
+            message_box(
+                &format!("创建主窗口失败（错误码 {code}），程序无法启动。"),
+                MB_OK | MB_ICONERROR,
+            );
             UnregisterClassW(class.as_ptr(), hinstance);
             return;
         }
@@ -101,6 +133,7 @@ pub fn run() {
             hooks: None,
             wts_registered: false,
             away: false,
+            startup_attempts: 0,
         };
         APP.with(|cell| {
             *cell.borrow_mut() = Some(Box::new(app));
@@ -113,6 +146,8 @@ pub fn run() {
                 app.wts_registered = wts_ok;
                 app.update_tip(now);
                 app.arm_timer(now);
+                // 托盘图标和启动气泡等主循环开始后再处理，避免启动阶段弹窗阻塞初始化。
+                SetTimer(hwnd, STARTUP_TIMER_ID, 500, None);
             }
         });
 
@@ -231,9 +266,10 @@ impl Drop for AppIcon {
     }
 }
 
+/// 注册成功时返回持有图标的数组；失败时显示错误码并返回 None。
 unsafe fn register_main_class(
     hinstance: windows_sys::Win32::Foundation::HINSTANCE,
-) -> [AppIcon; 2] {
+) -> Option<[AppIcon; 2]> {
     let class = wide(WINDOW_CLASS);
     // 分别按系统尺寸加载大小图标，避免共享缓存返回错误尺寸。
     let icons = [
@@ -254,8 +290,15 @@ unsafe fn register_main_class(
         lpszClassName: class.as_ptr(),
         hIconSm: icons[1].handle,
     };
-    RegisterClassExW(&wc);
-    icons
+    if RegisterClassExW(&wc) == 0 {
+        let code = GetLastError();
+        message_box(
+            &format!("注册主窗口类失败（错误码 {code}），程序无法启动。"),
+            MB_OK | MB_ICONERROR,
+        );
+        return None;
+    }
+    Some(icons)
 }
 
 fn now_ms() -> u64 {
@@ -280,6 +323,7 @@ struct App {
     hooks: Option<hooks::Hooks>,
     wts_registered: bool,
     away: bool,
+    startup_attempts: u32,
 }
 
 impl App {
@@ -331,6 +375,46 @@ impl App {
         unsafe {
             SetTimer(self.hwnd, TIMER_ID, delay, None);
         }
+    }
+
+    /// 托盘缺失时重试添加，成功后显示一次带当前时长的启动气泡。
+    /// 返回 false 表示启动失败，调用方应销毁主窗口退出。
+    fn announce_startup(&mut self) -> bool {
+        if !self.tray.is_added() {
+            self.tray.readd();
+            if !self.tray.is_added() {
+                self.startup_attempts = self.startup_attempts.saturating_add(1);
+                if self.startup_attempts >= STARTUP_RETRY_LIMIT {
+                    unsafe {
+                        KillTimer(self.hwnd, STARTUP_TIMER_ID);
+                    }
+                    message_box(
+                        "无法创建托盘图标，程序不能继续运行。\n请确认任务栏通知区域可用后重新启动站会儿。",
+                        MB_OK | MB_ICONERROR,
+                    );
+                    return false;
+                }
+                unsafe {
+                    SetTimer(self.hwnd, STARTUP_TIMER_ID, 1_000, None);
+                }
+                return true;
+            }
+        }
+
+        unsafe {
+            KillTimer(self.hwnd, STARTUP_TIMER_ID);
+        }
+        let text = format!(
+            "已开始计时：工作 {} 分钟，休息 {} 分钟。\n右键托盘图标可设置，双击打开设置。",
+            self.cfg.work_minutes, self.cfg.break_minutes
+        );
+        if !self.tray.balloon("站会儿已启动", &text) {
+            message_box(
+                "启动提示气泡显示失败，但程序已经在托盘中运行。\n请检查任务栏通知区域设置。",
+                MB_OK | MB_ICONWARNING,
+            );
+        }
+        true
     }
 
     fn on_timer(&mut self) {
@@ -459,6 +543,7 @@ impl App {
         settings::close_without_save();
         unsafe {
             KillTimer(self.hwnd, TIMER_ID);
+            KillTimer(self.hwnd, STARTUP_TIMER_ID);
         }
         self.stop_break_resources();
         self.popup.hide();
@@ -483,6 +568,8 @@ impl App {
                 // 菜单打开期间也照常处理：TrackPopupMenu 的模态循环会分发 WM_TIMER。
                 if wparam == TIMER_ID {
                     self.on_timer();
+                } else if wparam == STARTUP_TIMER_ID && !self.announce_startup() {
+                    return WndOutcome::DestroyMain;
                 }
                 WndOutcome::Handled(0)
             }
