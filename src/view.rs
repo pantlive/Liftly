@@ -3,9 +3,9 @@
 use crate::schedule::Phase;
 
 /// 倒计时气泡在 96 DPI 下的基准宽度。
-pub const BUBBLE_BASE_WIDTH: i32 = 154;
+pub const BUBBLE_BASE_WIDTH: i32 = 180;
 /// 倒计时气泡在 96 DPI 下的基准高度。
-pub const BUBBLE_BASE_HEIGHT: i32 = 56;
+pub const BUBBLE_BASE_HEIGHT: i32 = 42;
 /// 气泡默认距工作区边缘的间距（96 DPI）。
 pub const BUBBLE_BASE_MARGIN: i32 = 16;
 
@@ -169,11 +169,11 @@ mod tests {
     #[test]
     fn bubble_size_and_margin_scale_by_dpi() {
         for (dpi, size, margin) in [
-            (0, (154, 56), 16),
-            (96, (154, 56), 16),
-            (120, (193, 70), 20),
-            (144, (231, 84), 24),
-            (192, (308, 112), 32),
+            (0, (180, 42), 16),
+            (96, (180, 42), 16),
+            (120, (225, 53), 20),
+            (144, (270, 63), 24),
+            (192, (360, 84), 32),
         ] {
             assert_eq!(bubble_size(dpi), size, "dpi={dpi}");
             assert_eq!(bubble_margin(dpi), margin, "dpi={dpi}");
@@ -188,15 +188,15 @@ mod tests {
         assert_eq!(
             rect,
             BubbleRect {
-                x: 1750,
+                x: 1724,
                 y: 16,
-                width: 154,
-                height: 56,
+                width: 180,
+                height: 42,
             }
         );
         // 高 DPI 下按缩放后的尺寸和边距重新计算。
         let rect = bubble_rect(144, work(0, 0, 1920, 1040), None);
-        assert_eq!(rect.x, 1920 - 231 - 24);
+        assert_eq!(rect.x, 1920 - 270 - 24);
         assert_eq!(rect.y, 24);
     }
 
@@ -212,10 +212,10 @@ mod tests {
         assert_eq!(
             bubble_rect(96, area, Some((5000, 5000))),
             BubbleRect {
-                x: 1766,
-                y: 984,
-                width: 154,
-                height: 56,
+                x: 1740,
+                y: 998,
+                width: 180,
+                height: 42,
             }
         );
         assert_eq!(
@@ -232,7 +232,7 @@ mod tests {
         let area = work(-1920, 0, 0, 1040);
         // 副屏在主屏左侧时，默认位置和副屏上的坐标都保持负数。
         let default = bubble_rect(96, area, None);
-        assert_eq!((default.x, default.y), (-170, 16));
+        assert_eq!((default.x, default.y), (-196, 16));
         let saved = bubble_rect(96, area, Some((-1000, 100)));
         assert_eq!((saved.x, saved.y), (-1000, 100));
         let offscreen = bubble_rect(96, area, Some((-3000, -100)));
@@ -243,7 +243,7 @@ mod tests {
     fn tiny_work_area_keeps_origin_and_size() {
         let rect = bubble_rect(96, work(0, 0, 100, 40), None);
         assert_eq!((rect.x, rect.y), (0, 0));
-        assert_eq!((rect.width, rect.height), (154, 56));
+        assert_eq!((rect.width, rect.height), (180, 42));
         let rect = bubble_rect(96, work(100, 100, 100, 100), Some((120, 130)));
         assert_eq!((rect.x, rect.y), (100, 100));
     }
@@ -253,18 +253,34 @@ mod tests {
         let area = work(-1920, -1440, 640, 0);
         let saved = bubble_rect(192, area, Some((-800, -900)));
         assert_eq!((saved.x, saved.y), (-800, -900));
-        assert_eq!((saved.width, saved.height), (308, 112));
+        assert_eq!((saved.width, saved.height), (360, 84));
         // 上方副屏边缘的坐标按缩放后的尺寸夹取，不能裁掉卡片。
         let edge = bubble_rect(192, area, Some((600, -10)));
-        assert_eq!((edge.x, edge.y), (332, -112));
+        assert_eq!((edge.x, edge.y), (280, -84));
         let default = bubble_rect(192, area, None);
-        assert_eq!((default.x, default.y), (300, -1408));
+        assert_eq!((default.x, default.y), (248, -1408));
     }
 
     #[test]
     fn clamp_handles_work_area_offset_by_taskbar() {
         let area = work(100, 100, 1000, 700);
-        assert_eq!(clamp_bubble_position(5000, 5000, 154, 56, area), (846, 644));
-        assert_eq!(clamp_bubble_position(0, 0, 154, 56, area), (100, 100));
+        assert_eq!(clamp_bubble_position(5000, 5000, 180, 42, area), (820, 658));
+        assert_eq!(clamp_bubble_position(0, 0, 180, 42, area), (100, 100));
+    }
+
+    #[test]
+    fn scaled_bubble_stays_within_secondary_work_area() {
+        let area = work(-1920, -1080, 0, 0);
+        for dpi in [96, 120, 144, 192] {
+            // 对不同缩放下的默认位置和越界保存位置都检查完整可见性。
+            for saved in [None, Some((-1, -1)), Some((-5000, -5000))] {
+                let rect = bubble_rect(dpi, area, saved);
+                assert!(rect.x >= area.left && rect.x + rect.width <= area.right);
+                assert!(rect.y >= area.top && rect.y + rect.height <= area.bottom);
+            }
+            let tiny = bubble_rect(dpi, work(-100, -20, 0, 0), Some((10, 10)));
+            assert_eq!((tiny.x, tiny.y), (-100, -20), "dpi={dpi}");
+            assert_eq!((tiny.width, tiny.height), bubble_size(dpi));
+        }
     }
 }

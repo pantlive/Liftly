@@ -1,4 +1,4 @@
-//! 桌面倒计时气泡。紧凑的深色圆角卡片，可拖动并按显示器工作区夹取。
+//! 桌面倒计时气泡。浅绿色双行圆角卡片，可拖动并按显示器工作区夹取。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, Ordering};
 use std::sync::Once;
@@ -9,30 +9,30 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, FillRgn, FrameRgn,
     GetMonitorInfoW, InvalidateRect, MonitorFromRect, MonitorFromWindow, SelectObject, SetBkMode,
     SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_BOLD,
-    FW_NORMAL, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_NORMAL, HDC, HMONITOR,
+    MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture, SetCapture};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect, GetCursorPos, GetSystemMetrics,
-    GetWindowRect, IsWindow, LoadCursorW, PostMessageW, RegisterClassW, SetLayeredWindowAttributes,
-    SetWindowPos, ShowWindow, SystemParametersInfoW, HTCLIENT, HTTRANSPARENT, HWND_TOPMOST,
-    IDC_SIZEALL, LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE, SM_CXSCREEN, SM_CYSCREEN,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DrawIconEx, GetClientRect, GetCursorPos,
+    GetSystemMetrics, GetWindowRect, IsWindow, LoadCursorW, PostMessageW, RegisterClassW,
+    SetLayeredWindowAttributes, SetWindowPos, ShowWindow, SystemParametersInfoW, DI_NORMAL,
+    HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_SIZEALL, LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE,
+    SM_CXSCREEN, SM_CYSCREEN,
     SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE, WM_CAPTURECHANGED,
     WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
-use super::wide;
+use super::{wide, AppIcon};
 use crate::view::{self, WorkArea};
 
 const BUBBLE_CLASS: &str = "Liftly.CountdownBubble";
-const BASE_RADIUS: i32 = 12;
-const ALPHA: u8 = 238;
+const BASE_RADIUS: i32 = 6;
+const ALPHA: u8 = 248;
 const DRAG_THRESHOLD: i32 = 3;
 
 static CLASS_REGISTERED: Once = Once::new();
@@ -538,92 +538,82 @@ unsafe fn paint(hwnd: HWND) {
     // GDI 接收的是圆角椭圆的直径，与命中测试使用同一个半径。
     let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
     let paused = PAUSED.load(Ordering::SeqCst);
-    let (accent, border) = if paused {
-        (rgb(245, 185, 66), rgb(126, 94, 40))
+    let (background_color, border, status_color) = if paused {
+        (rgb(255, 248, 225), rgb(199, 162, 91), rgb(143, 99, 27))
     } else {
-        (rgb(61, 220, 151), rgb(45, 105, 84))
+        (rgb(239, 248, 225), rgb(115, 181, 83), rgb(58, 104, 48))
     };
+    let dpi = dpi_for_window(hwnd);
+    let scaled = |value| view::scale_for_dpi(value, dpi);
 
     if !region.is_null() {
-        let background = CreateSolidBrush(rgb(25, 30, 37));
+        let background = CreateSolidBrush(background_color);
         if !background.is_null() {
             FillRgn(memory_dc, region, background);
             DeleteObject(background);
         }
         let border_brush = CreateSolidBrush(border);
         if !border_brush.is_null() {
-            FrameRgn(memory_dc, region, border_brush, 1, 1);
+            let border_width = scaled(1).max(1);
+            FrameRgn(memory_dc, region, border_brush, border_width, border_width);
             DeleteObject(border_brush);
         }
         DeleteObject(region);
     }
 
-    // 左侧细状态条：绿色表示计时中，琥珀色表示已暂停。
-    let pad = (12 * height / view::BUBBLE_BASE_HEIGHT).max(8);
-    let bar_width = (4 * height / view::BUBBLE_BASE_HEIGHT).max(2);
-    let bar_top = (14 * height / view::BUBBLE_BASE_HEIGHT).max(5);
-    let bar_bottom = height.saturating_sub(bar_top);
-    let bar_radius = (bar_width / 2).max(1);
-    let bar = CreateRoundRectRgn(
-        pad,
-        bar_top,
-        pad.saturating_add(bar_width),
-        bar_bottom,
-        bar_radius * 2,
-        bar_radius * 2,
-    );
-    if !bar.is_null() {
-        let bar_brush = CreateSolidBrush(accent);
-        if !bar_brush.is_null() {
-            FillRgn(memory_dc, bar, bar_brush);
-            DeleteObject(bar_brush);
-        }
-        DeleteObject(bar);
-    }
-
-    let text_left = pad
-        .saturating_add(bar_width)
-        .saturating_add((8 * height / view::BUBBLE_BASE_HEIGHT).max(5));
-    let text_right = width.saturating_sub(pad).max(text_left + 1);
-    let label_size = (11 * height / view::BUBBLE_BASE_HEIGHT).max(9);
-    let clock_size = (25 * height / view::BUBBLE_BASE_HEIGHT).max(13);
-    let label = if paused { "已暂停" } else { "距休息" };
+    // 文字和右侧品牌图标分别占用固定区域，最长配置倒计时 600:00 也能完整显示。
+    let pad = scaled(9);
+    let icon_size = scaled(28);
+    let icon_left = width - pad - icon_size;
+    let text_right = icon_left - scaled(7);
+    let font_size = scaled(13);
     let clock = crate::view::format_clock(REMAINING_MS.load(Ordering::SeqCst));
-
-    let label_rect = RECT {
-        left: text_left,
-        top: height * 9 / 100,
+    let countdown = format!("距休息 {clock}");
+    let countdown_rect = RECT {
+        left: pad,
+        top: scaled(4),
         right: text_right,
-        bottom: height * 38 / 100,
+        bottom: height / 2,
     };
     draw_text(
         memory_dc,
-        label,
-        &label_rect,
-        label_size,
+        &countdown,
+        &countdown_rect,
+        font_size,
         FW_NORMAL as i32,
-        rgb(150, 162, 174),
+        rgb(43, 82, 43),
     );
 
-    let clock_rect = RECT {
-        left: text_left,
-        top: height * 37 / 100,
+    let status_rect = RECT {
+        left: pad,
+        top: height / 2,
         right: text_right,
-        bottom: height * 94 / 100,
-    };
-    let clock_color = if paused {
-        rgb(255, 205, 120)
-    } else {
-        rgb(240, 245, 250)
+        bottom: height - scaled(4),
     };
     draw_text(
         memory_dc,
-        &clock,
-        &clock_rect,
-        clock_size,
-        FW_BOLD as i32,
-        clock_color,
+        if paused { "已暂停" } else { "工作中" },
+        &status_rect,
+        font_size,
+        FW_NORMAL as i32,
+        status_color,
     );
+
+    // 复用嵌入的 Liftly 图标；AppIcon 在绘制结束时释放自有句柄，共享兜底图标不销毁。
+    let icon = AppIcon::load(icon_size, icon_size);
+    if !icon.handle.is_null() {
+        DrawIconEx(
+            memory_dc,
+            icon_left,
+            (height - icon_size) / 2,
+            icon.handle,
+            icon_size,
+            icon_size,
+            0,
+            std::ptr::null_mut(),
+            DI_NORMAL,
+        );
+    }
 
     BitBlt(hdc, 0, 0, width, height, memory_dc, 0, 0, SRCCOPY);
 
@@ -634,7 +624,7 @@ unsafe fn paint(hwnd: HWND) {
 }
 
 fn radius_for(height: i32) -> i32 {
-    (BASE_RADIUS * height / view::BUBBLE_BASE_HEIGHT).max(4)
+    (BASE_RADIUS * height / view::BUBBLE_BASE_HEIGHT).max(1)
 }
 
 unsafe fn draw_text(hdc: HDC, text: &str, rect: &RECT, size: i32, weight: i32, color: u32) {
@@ -643,7 +633,8 @@ unsafe fn draw_text(hdc: HDC, text: &str, rect: &RECT, size: i32, weight: i32, c
     }
     let face = wide("Microsoft YaHei UI");
     let font = CreateFontW(
-        size,
+        // 负高度指定实际字形高度，避免不同 DPI 下字符偏小。
+        -size,
         0,
         0,
         0,
@@ -673,7 +664,7 @@ unsafe fn draw_text(hdc: HDC, text: &str, rect: &RECT, size: i32, weight: i32, c
         text.as_ptr(),
         -1,
         &mut text_rect,
-        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
     );
 
     SelectObject(hdc, old_font);
