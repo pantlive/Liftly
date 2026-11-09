@@ -345,7 +345,29 @@ say "== c3. 检查桌面倒计时气泡 Liftly.CountdownBubble =="
 BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
 if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
   pass "c3. 检测到可见的 Liftly.CountdownBubble 窗口"
-  # 浅绿双行 UI 在 96 DPI 下约 180x42；按窗口或系统 DPI 校验，允许 2px 舍入误差。
+  # 浅绿双行 UI 在 96 DPI、100% 下约 180x42；按窗口或系统 DPI 与 bubble_scale 校验，允许 2px 舍入误差。
+  BUBBLE_SCALE=100
+  if [ -f "$TARGET_DIR/liftly.ini" ]; then
+    BUBBLE_SCALE_RAW="$(awk -F= '
+      {
+        key=$1
+        sub(/^[ \t\r]+/, "", key)
+        sub(/[ \t\r]+$/, "", key)
+      }
+      tolower(key)=="bubble_scale" {
+        val=$2
+        sub(/[;#].*/, "", val)
+        sub(/^[ \t\r]+/, "", val)
+        sub(/[ \t\r]+$/, "", val)
+        print val
+        exit
+      }
+    ' "$TARGET_DIR/liftly.ini")"
+    if [ -n "$BUBBLE_SCALE_RAW" ] && [ "$BUBBLE_SCALE_RAW" -ge 50 ] 2>/dev/null \
+      && [ "$BUBBLE_SCALE_RAW" -le 300 ] 2>/dev/null; then
+      BUBBLE_SCALE="$BUBBLE_SCALE_RAW"
+    fi
+  fi
   BUBBLE_LINE="$(printf '%s\n' "$WIN_LIST" | tr -d '\r' | awk -F'|' \
     -v p="$MAIN_PID" '$1 == p && $2 == "Liftly.CountdownBubble" && $3 == "1" { print; exit }')"
   if [ -n "$BUBBLE_LINE" ]; then
@@ -354,12 +376,14 @@ if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
     B_DPI="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f8)"
     B_SYSTEM_DPI="$(printf '%s\n' "$BUBBLE_LINE" | cut -d'|' -f9)"
     size_matches() {
-      local width="$1" height="$2" dpi="${3:-0}"
+      local width="$1" height="$2" dpi="${3:-0}" scale="${4:-100}"
       if [ -z "$width" ] || [ -z "$height" ] || [ "$dpi" -le 0 ] 2>/dev/null; then
         return 1
       fi
-      local expect_width=$(((180 * dpi + 48) / 96))
-      local expect_height=$(((42 * dpi + 48) / 96))
+      local effective=$(((dpi * scale + 50) / 100))
+      [ "$effective" -lt 1 ] && effective=1
+      local expect_width=$(((180 * effective + 48) / 96))
+      local expect_height=$(((42 * effective + 48) / 96))
       local diff_width=$((width - expect_width))
       local diff_height=$((height - expect_height))
       [ "$diff_width" -lt 0 ] && diff_width=$((-diff_width))
@@ -367,14 +391,14 @@ if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
       [ "$diff_width" -le 2 ] && [ "$diff_height" -le 2 ]
     }
     EXPECT_DPI="$B_DPI"
-    if ! size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI"; then
+    if ! size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI" "$BUBBLE_SCALE"; then
       EXPECT_DPI="$B_SYSTEM_DPI"
     fi
-    if size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI" \
-      || size_matches "$B_WIDTH" "$B_HEIGHT" "$B_SYSTEM_DPI"; then
-      pass "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 符合紧凑基准（DPI=$EXPECT_DPI）"
+    if size_matches "$B_WIDTH" "$B_HEIGHT" "$B_DPI" "$BUBBLE_SCALE" \
+      || size_matches "$B_WIDTH" "$B_HEIGHT" "$B_SYSTEM_DPI" "$BUBBLE_SCALE"; then
+      pass "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 符合紧凑基准（DPI=$EXPECT_DPI, scale=${BUBBLE_SCALE}%）"
     else
-      fail "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 不符合紧凑基准（窗口 DPI=$B_DPI，系统 DPI=$B_SYSTEM_DPI）"
+      fail "c3. 气泡尺寸 ${B_WIDTH}x${B_HEIGHT} 不符合紧凑基准（窗口 DPI=$B_DPI，系统 DPI=$B_SYSTEM_DPI，scale=${BUBBLE_SCALE}%）"
     fi
   else
     info "c3. 未能解析气泡窗口矩形，跳过尺寸校验"

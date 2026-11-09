@@ -1,16 +1,17 @@
 //! 桌面倒计时气泡。浅绿色双行圆角卡片，可拖动并按显示器工作区夹取。
 
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Once;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateRoundRectRgn,
-    CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect, FillRgn, FrameRgn,
-    GetMonitorInfoW, InvalidateRect, MonitorFromRect, MonitorFromWindow, SelectObject, SetBkMode,
-    SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_NORMAL, HDC, HMONITOR,
-    MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
+    CreateRoundRectRgn, CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, EndPaint, FillRect,
+    FillRgn, FrameRgn, GetMonitorInfoW, InvalidateRect, MonitorFromRect, MonitorFromWindow,
+    SelectObject, SetBkMode, SetTextColor, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, FF_DONTCARE, FW_NORMAL, HDC,
+    HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY,
+    TRANSPARENT,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
@@ -20,10 +21,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, GetWindowRect, IsWindow, LoadCursorW, PostMessageW, RegisterClassW,
     SetLayeredWindowAttributes, SetWindowPos, ShowWindow, SystemParametersInfoW, DI_NORMAL,
     HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_SIZEALL, LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE,
-    SM_CXSCREEN, SM_CYSCREEN,
-    SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE, WM_CAPTURECHANGED,
-    WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED,
+    SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
+    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
@@ -46,6 +46,7 @@ static DRAG_CURSOR_X: AtomicI32 = AtomicI32::new(0);
 static DRAG_CURSOR_Y: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_X: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_Y: AtomicI32 = AtomicI32::new(0);
+static BUBBLE_SCALE: AtomicU32 = AtomicU32::new(100);
 
 /// 倒计时气泡。窗口句柄统一保存在静态变量中，避免结构体继续操作已销毁的句柄。
 #[derive(Default)]
@@ -60,12 +61,19 @@ impl Bubble {
     }
 
     /// 更新显示内容；窗口不存在时按保存位置创建，之后仅重绘，避免打断拖动。
-    pub fn show(&mut self, remaining_ms: u64, paused: bool, saved: Option<(i32, i32)>) -> bool {
+    pub fn show(
+        &mut self,
+        remaining_ms: u64,
+        paused: bool,
+        saved: Option<(i32, i32)>,
+        scale: u32,
+    ) -> bool {
         REMAINING_MS.store(remaining_ms, Ordering::SeqCst);
         PAUSED.store(paused, Ordering::SeqCst);
 
         let mut hwnd = current_hwnd();
         if hwnd.is_null() {
+            BUBBLE_SCALE.store(scale, Ordering::SeqCst);
             ensure_class();
             hwnd = unsafe { create_bubble_window(saved) };
             if hwnd.is_null() {
@@ -81,8 +89,13 @@ impl Bubble {
                     // 极旧系统不支持组合标志时至少保留圆角透明，卡片改为不透明。
                     SetLayeredWindowAttributes(hwnd, key_color(), 0, LWA_COLORKEY);
                 }
-                // 创建时按系统 DPI 估算；再按窗口实际 DPI 校正尺寸、边距和保存位置。
-                let rect = view::bubble_rect(dpi_for_window(hwnd), work_area_for_window(hwnd), saved);
+                // 创建时按系统 DPI 估算；再按窗口实际 DPI 和用户缩放校正尺寸、边距和保存位置。
+                let rect = view::bubble_rect(
+                    dpi_for_window(hwnd),
+                    scale,
+                    work_area_for_window(hwnd),
+                    saved,
+                );
                 SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
@@ -98,6 +111,13 @@ impl Bubble {
                 ShowWindow(hwnd, SW_SHOWNOACTIVATE);
             }
             self.failed = false;
+        } else if BUBBLE_SCALE.load(Ordering::SeqCst) != scale
+            && !DRAG_ACTIVE.load(Ordering::SeqCst)
+        {
+            BUBBLE_SCALE.store(scale, Ordering::SeqCst);
+            unsafe {
+                apply_new_scale(hwnd, saved);
+            }
         }
 
         unsafe {
@@ -180,12 +200,13 @@ fn ensure_class() {
 
 unsafe fn create_bubble_window(saved: Option<(i32, i32)>) -> HWND {
     let dpi = system_dpi();
+    let scale = BUBBLE_SCALE.load(Ordering::SeqCst);
     // 有保存坐标时在坐标所在的显示器上夹取，支持副屏负坐标；否则使用主屏工作区。
     let area = match saved {
         Some(point) => work_area_for_point(point),
         None => primary_work_area(),
     };
-    let rect = view::bubble_rect(dpi, area, saved);
+    let rect = view::bubble_rect(dpi, scale, area, saved);
 
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class = wide(BUBBLE_CLASS);
@@ -303,16 +324,14 @@ fn outside_rounded_corners(x: i32, y: i32, width: i32, height: i32, radius: i32)
         (x < radius && y >= bottom, radius, bottom),
         (x >= right && y >= bottom, right, bottom),
     ];
-    corners
-        .into_iter()
-        .any(|(in_corner, center_x, center_y)| {
-            if !in_corner {
-                return false;
-            }
-            let dx = x.saturating_sub(center_x);
-            let dy = y.saturating_sub(center_y);
-            dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) > radius_squared
-        })
+    corners.into_iter().any(|(in_corner, center_x, center_y)| {
+        if !in_corner {
+            return false;
+        }
+        let dx = x.saturating_sub(center_x);
+        let dy = y.saturating_sub(center_y);
+        dx.saturating_mul(dx).saturating_add(dy.saturating_mul(dy)) > radius_squared
+    })
 }
 
 unsafe fn begin_drag(hwnd: HWND) {
@@ -348,15 +367,7 @@ unsafe fn drag_to_cursor(hwnd: HWND) {
     }
     let x = DRAG_WINDOW_X.load(Ordering::SeqCst).saturating_add(dx);
     let y = DRAG_WINDOW_Y.load(Ordering::SeqCst).saturating_add(dy);
-    SetWindowPos(
-        hwnd,
-        HWND_TOPMOST,
-        x,
-        y,
-        0,
-        0,
-        SWP_NOSIZE | SWP_NOACTIVATE,
-    );
+    SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 /// 结束拖动；松开鼠标时先把窗口夹回最近显示器的工作区，再通知主窗口保存坐标。
@@ -390,7 +401,8 @@ unsafe fn clamp_window(hwnd: HWND) -> bool {
     if GetWindowRect(hwnd, &mut rect) == 0 {
         return false;
     }
-    let (width, height) = view::bubble_size(dpi_for_window(hwnd));
+    let (width, height) =
+        view::bubble_size(dpi_for_window(hwnd), BUBBLE_SCALE.load(Ordering::SeqCst));
     let area = work_area_for_window(hwnd);
     // 跨 DPI 拖动时仅调整尺寸，避免在鼠标仍按住时把窗口夹回屏幕边缘。
     let (x, y) = if DRAG_ACTIVE.load(Ordering::SeqCst) {
@@ -401,15 +413,7 @@ unsafe fn clamp_window(hwnd: HWND) -> bool {
     let resized = rect.right.saturating_sub(rect.left) != width
         || rect.bottom.saturating_sub(rect.top) != height;
     if x != rect.left || y != rect.top || resized {
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE,
-        );
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
     }
     x != rect.left || y != rect.top
 }
@@ -439,6 +443,37 @@ fn dpi_for_window(hwnd: HWND) -> u32 {
     match unsafe { GetDpiForWindow(hwnd) } {
         0 => system_dpi(),
         dpi => dpi,
+    }
+}
+
+fn effective_dpi(hwnd: HWND) -> u32 {
+    view::bubble_dpi(dpi_for_window(hwnd), BUBBLE_SCALE.load(Ordering::SeqCst))
+}
+
+/// 缩放变化后调整窗口：自动位置重新贴回右上角；已保存坐标则保持左上角并夹回工作区。
+unsafe fn apply_new_scale(hwnd: HWND, saved: Option<(i32, i32)>) {
+    let dpi = dpi_for_window(hwnd);
+    let scale = BUBBLE_SCALE.load(Ordering::SeqCst);
+    let area = work_area_for_window(hwnd);
+    let (x, y, width, height, notify) = match saved {
+        None => {
+            let rect = view::bubble_rect(dpi, scale, area, None);
+            (rect.x, rect.y, rect.width, rect.height, false)
+        }
+        Some(_) => {
+            let mut current: RECT = std::mem::zeroed();
+            if GetWindowRect(hwnd, &mut current) == 0 {
+                return;
+            }
+            let (width, height) = view::bubble_size(dpi, scale);
+            let (x, y) =
+                view::clamp_bubble_position(current.left, current.top, width, height, area);
+            (x, y, width, height, x != current.left || y != current.top)
+        }
+    };
+    SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+    if notify {
+        notify_moved(hwnd);
     }
 }
 
@@ -543,7 +578,7 @@ unsafe fn paint(hwnd: HWND) {
     } else {
         (rgb(239, 248, 225), rgb(115, 181, 83), rgb(58, 104, 48))
     };
-    let dpi = dpi_for_window(hwnd);
+    let dpi = effective_dpi(hwnd);
     let scaled = |value| view::scale_for_dpi(value, dpi);
 
     if !region.is_null() {

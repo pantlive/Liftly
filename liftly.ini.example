@@ -22,3 +22,6 @@ show_bubble = true
 
 # 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存
 bubble_position = auto
+
+# 气泡大小百分比，50-300；100 为标准大小
+bubble_scale = 100

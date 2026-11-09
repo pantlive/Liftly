@@ -1,5 +1,6 @@
 //! Windows 专用实现：单实例、隐藏消息窗口、托盘、提醒弹窗、计时驱动与休息锁定。
 
+mod autostart;
 pub mod bubble;
 pub mod hooks;
 pub mod overlay;
@@ -75,6 +76,9 @@ pub fn run() {
 
     unsafe {
         if is_second_instance() {
+            if crate::autostart::is_autostart_launch(std::env::args().skip(1)) {
+                return;
+            }
             let text = wide("站会儿已经在运行");
             let title = wide("站会儿");
             MessageBoxW(
@@ -387,6 +391,20 @@ impl App {
         });
     }
 
+    /// 气泡大小只影响窗口尺寸和绘制缩放，不重置计时。
+    fn set_bubble_scale(&mut self, percent: u32) {
+        if self.cfg.bubble_scale == percent {
+            return;
+        }
+        let now = now_ms();
+        self.cfg.bubble_scale = percent;
+        self.sync_bubble(now);
+        self.save_patch(&ConfigPatch {
+            bubble_scale: Some(percent),
+            ..ConfigPatch::default()
+        });
+    }
+
     fn update_tip(&mut self, now: u64) {
         let tip = match self.schedule.phase() {
             Phase::Working if self.schedule.warning_active(now) => {
@@ -420,7 +438,8 @@ impl App {
         let paused = self.schedule.phase() == Phase::Paused;
         let saved = self.cfg.bubble_position.coordinates();
         // 创建失败时静默降级，核心计时和托盘功能不受影响。
-        self.bubble.show(remaining, paused, saved);
+        self.bubble
+            .show(remaining, paused, saved, self.cfg.bubble_scale);
     }
 
     /// 拖动结束或显示器变化后，把窗口实际左上角写回 INI；不走 apply_patch，避免重置计时。
@@ -825,6 +844,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
                 let enabled = !app.cfg.show_bubble;
                 app.set_bubble_enabled(enabled);
             }
+            Some(tray::MenuAction::SetBubbleScale(value)) => app.set_bubble_scale(value),
             Some(tray::MenuAction::SetWork(value)) => app.apply_patch(ConfigPatch {
                 work_minutes: Some(value),
                 ..ConfigPatch::default()
