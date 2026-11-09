@@ -1,5 +1,6 @@
 //! Windows 专用实现：单实例、隐藏消息窗口、托盘、提醒弹窗、计时驱动与休息锁定。
 
+mod autostart;
 pub mod bubble;
 pub mod hooks;
 pub mod overlay;
@@ -75,6 +76,9 @@ pub fn run() {
 
     unsafe {
         if is_second_instance() {
+            if crate::autostart::is_autostart_launch(std::env::args().skip(1)) {
+                return;
+            }
             let text = wide("站会儿已经在运行");
             let title = wide("站会儿");
             MessageBoxW(
