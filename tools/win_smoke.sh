@@ -345,7 +345,7 @@ say "== c3. 检查桌面倒计时气泡 Liftly.CountdownBubble =="
 BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
 if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
   pass "c3. 检测到可见的 Liftly.CountdownBubble 窗口"
-  # 新 UI 在 96 DPI 下约 154x56；按窗口或系统 DPI 校验，允许 2px 舍入误差。
+  # 浅绿双行 UI 在 96 DPI 下约 180x42；按窗口或系统 DPI 校验，允许 2px 舍入误差。
   BUBBLE_LINE="$(printf '%s\n' "$WIN_LIST" | tr -d '\r' | awk -F'|' \
     -v p="$MAIN_PID" '$1 == p && $2 == "Liftly.CountdownBubble" && $3 == "1" { print; exit }')"
   if [ -n "$BUBBLE_LINE" ]; then
@@ -358,8 +358,8 @@ if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
       if [ -z "$width" ] || [ -z "$height" ] || [ "$dpi" -le 0 ] 2>/dev/null; then
         return 1
       fi
-      local expect_width=$(((154 * dpi + 48) / 96))
-      local expect_height=$(((56 * dpi + 48) / 96))
+      local expect_width=$(((180 * dpi + 48) / 96))
+      local expect_height=$(((42 * dpi + 48) / 96))
       local diff_width=$((width - expect_width))
       local diff_height=$((height - expect_height))
       [ "$diff_width" -lt 0 ] && diff_width=$((-diff_width))
