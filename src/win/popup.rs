@@ -91,12 +91,8 @@ impl Popup {
                 DestroyWindow(hwnd);
             }
             // DestroyWindow 会同步触发 WM_DESTROY；这里再兜底清一次，防止句柄残留。
-            let _ = POPUP_HWND.compare_exchange(
-                hwnd as isize,
-                0,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
+            let _ =
+                POPUP_HWND.compare_exchange(hwnd as isize, 0, Ordering::SeqCst, Ordering::SeqCst);
         }
         WARN_DEADLINE_MS.store(0, Ordering::SeqCst);
     }
@@ -157,8 +153,16 @@ unsafe fn create_popup_window() -> HWND {
         };
     }
 
-    let x = area.right.saturating_sub(width).saturating_sub(margin).max(area.left);
-    let y = area.bottom.saturating_sub(height).saturating_sub(margin).max(area.top);
+    let x = area
+        .right
+        .saturating_sub(width)
+        .saturating_sub(margin)
+        .max(area.left);
+    let y = area
+        .bottom
+        .saturating_sub(height)
+        .saturating_sub(margin)
+        .max(area.top);
 
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class = wide(POPUP_CLASS);
@@ -331,14 +335,7 @@ unsafe fn fill_background(hdc: HDC, rect: &RECT) {
     }
 }
 
-unsafe fn draw_text(
-    hdc: HDC,
-    text: &str,
-    rect: &RECT,
-    size: i32,
-    weight: i32,
-    color: u32,
-) {
+unsafe fn draw_text(hdc: HDC, text: &str, rect: &RECT, size: i32, weight: i32, color: u32) {
     if size <= 0 || rect.right <= rect.left || rect.bottom <= rect.top {
         return;
     }
