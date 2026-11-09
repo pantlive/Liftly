@@ -130,7 +130,8 @@ unsafe extern "system" fn dialog_proc(
                                     Err(message) => {
                                         MessageBoxW(
                                             hwnd,
-                                            wide(&format!("开机自启动设置失败：{message}")).as_ptr(),
+                                            wide(&format!("开机自启动设置失败：{message}"))
+                                                .as_ptr(),
                                             wide("设置提示").as_ptr(),
                                             MB_OK | MB_ICONWARNING,
                                         );

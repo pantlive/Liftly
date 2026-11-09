@@ -313,7 +313,7 @@ unsafe fn append_presets(
     true
 }
 
-/// 气泡大小子菜单；自定义 INI 值单独置灰展示，避免误映射到设置窗口。
+/// 气泡大小子菜单；非预设的自定义值单独置灰展示，避免误映射到设置窗口。
 unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
     let menu = CreatePopupMenu();
     if menu.is_null() {
@@ -341,7 +341,7 @@ unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
         }
     }
     if !BUBBLE_SCALE_PRESETS.contains(&current) {
-        let text = format!("当前（{current}%，来自 liftly.ini）");
+        let text = format!("当前（{current}%，自定义）");
         if AppendMenuW(
             menu,
             MF_STRING | MF_GRAYED | MF_CHECKED,

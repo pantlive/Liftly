@@ -1,4 +1,4 @@
-//! 桌面倒计时气泡。浅绿色双行圆角卡片，可拖动并按显示器工作区夹取。
+//! 桌面倒计时气泡。浅绿色双行圆角卡片，可拖动、拖边缩放并按显示器工作区夹取。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Once;
@@ -19,16 +19,17 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DrawIconEx, GetClientRect, GetCursorPos,
     GetSystemMetrics, GetWindowRect, IsWindow, LoadCursorW, PostMessageW, RegisterClassW,
-    SetLayeredWindowAttributes, SetWindowPos, ShowWindow, SystemParametersInfoW, DI_NORMAL,
-    HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_SIZEALL, LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE,
-    SM_CXSCREEN, SM_CYSCREEN, SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE,
-    WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SetCursor, SetLayeredWindowAttributes, SetWindowPos, ShowWindow, SystemParametersInfoW,
+    DI_NORMAL, HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, LWA_ALPHA, LWA_COLORKEY, MA_NOACTIVATE, SM_CXSCREEN, SM_CYSCREEN,
+    SPI_GETWORKAREA, SWP_NOACTIVATE, SWP_NOSIZE, SW_SHOWNOACTIVATE, WM_CAPTURECHANGED, WM_CLOSE,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_NCHITTEST, WM_PAINT, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 use super::{wide, AppIcon};
-use crate::view::{self, WorkArea};
+use crate::view::{self, BubbleRect, ResizeEdge, WorkArea};
 
 const BUBBLE_CLASS: &str = "Liftly.CountdownBubble";
 const BASE_RADIUS: i32 = 6;
@@ -47,6 +48,13 @@ static DRAG_CURSOR_Y: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_X: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_Y: AtomicI32 = AtomicI32::new(0);
 static BUBBLE_SCALE: AtomicU32 = AtomicU32::new(100);
+/// 0 表示没有在调整大小；非 0 为 [`ResizeEdge`] 的编码。
+static RESIZE_EDGE: AtomicU32 = AtomicU32::new(0);
+static RESIZE_START_W: AtomicI32 = AtomicI32::new(0);
+static RESIZE_START_H: AtomicI32 = AtomicI32::new(0);
+static RESIZE_START_SCALE: AtomicU32 = AtomicU32::new(100);
+/// 鼠标缩放已改窗口尺寸，但主窗口尚未把 `bubble_scale` 写回配置。
+static SCALE_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// 倒计时气泡。窗口句柄统一保存在静态变量中，避免结构体继续操作已销毁的句柄。
 #[derive(Default)]
@@ -113,11 +121,15 @@ impl Bubble {
             self.failed = false;
         } else if BUBBLE_SCALE.load(Ordering::SeqCst) != scale
             && !DRAG_ACTIVE.load(Ordering::SeqCst)
+            && !SCALE_PENDING.load(Ordering::SeqCst)
         {
             BUBBLE_SCALE.store(scale, Ordering::SeqCst);
             unsafe {
                 apply_new_scale(hwnd, saved);
             }
+        }
+        if BUBBLE_SCALE.load(Ordering::SeqCst) == scale {
+            SCALE_PENDING.store(false, Ordering::SeqCst);
         }
 
         unsafe {
@@ -153,6 +165,7 @@ impl Bubble {
                 BUBBLE_HWND.compare_exchange(hwnd as isize, 0, Ordering::SeqCst, Ordering::SeqCst);
         }
         REMAINING_MS.store(0, Ordering::SeqCst);
+        SCALE_PENDING.store(false, Ordering::SeqCst);
     }
 
     pub fn reset_failure(&mut self) {
@@ -188,7 +201,7 @@ fn ensure_class() {
             cbWndExtra: 0,
             hInstance: hinstance,
             hIcon: std::ptr::null_mut(),
-            // 鼠标悬停卡片时提示可以拖动。
+            // 中间区域的类光标提示可以移动；边缘光标由 WM_SETCURSOR 覆盖。
             hCursor: LoadCursorW(std::ptr::null_mut(), IDC_SIZEALL),
             hbrBackground: std::ptr::null_mut(),
             lpszMenuName: std::ptr::null(),
@@ -242,12 +255,21 @@ unsafe extern "system" fn bubble_wnd_proc(
         // 卡片区域接收鼠标用于拖动，圆角外继续穿透到桌面。
         WM_NCHITTEST => hit_test(hwnd, lparam),
         WM_MOUSEACTIVATE => MA_NOACTIVATE as LRESULT,
+        WM_SETCURSOR => apply_hover_cursor(hwnd, wparam, lparam),
         WM_LBUTTONDOWN => {
-            begin_drag(hwnd);
+            if let Some(edge) = resize_edge_at_cursor(hwnd) {
+                begin_resize(hwnd, edge);
+            } else {
+                begin_drag(hwnd);
+            }
             0
         }
         WM_MOUSEMOVE => {
-            drag_to_cursor(hwnd);
+            if RESIZE_EDGE.load(Ordering::SeqCst) != 0 {
+                resize_to_cursor(hwnd);
+            } else {
+                drag_to_cursor(hwnd);
+            }
             0
         }
         WM_LBUTTONUP => {
@@ -334,6 +356,67 @@ fn outside_rounded_corners(x: i32, y: i32, width: i32, height: i32, radius: i32)
     })
 }
 
+unsafe fn apply_hover_cursor(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    let hit = (lparam as u32) & 0xffff;
+    if hit != HTCLIENT {
+        return DefWindowProcW(hwnd, WM_SETCURSOR, wparam, lparam);
+    }
+    let edge =
+        edge_from_code(RESIZE_EDGE.load(Ordering::SeqCst)).or_else(|| resize_edge_at_cursor(hwnd));
+    if let Some(edge) = edge {
+        set_resize_cursor(edge);
+        1
+    } else {
+        DefWindowProcW(hwnd, WM_SETCURSOR, wparam, lparam)
+    }
+}
+
+unsafe fn resize_edge_at_cursor(hwnd: HWND) -> Option<ResizeEdge> {
+    let mut point: POINT = std::mem::zeroed();
+    let mut rect: RECT = std::mem::zeroed();
+    if GetCursorPos(&mut point) == 0 || GetWindowRect(hwnd, &mut rect) == 0 {
+        return None;
+    }
+    let width = rect.right.saturating_sub(rect.left);
+    let height = rect.bottom.saturating_sub(rect.top);
+    let x = point.x.saturating_sub(rect.left);
+    let y = point.y.saturating_sub(rect.top);
+    let band = view::scale_for_dpi(view::BUBBLE_RESIZE_BAND, dpi_for_window(hwnd)).max(1);
+    view::resize_edge_at(x, y, width, height, band)
+}
+
+fn set_resize_cursor(edge: ResizeEdge) {
+    let idc = match edge {
+        ResizeEdge::Left | ResizeEdge::Right => IDC_SIZEWE,
+        ResizeEdge::Top | ResizeEdge::Bottom => IDC_SIZENS,
+        ResizeEdge::TopLeft | ResizeEdge::BottomRight => IDC_SIZENWSE,
+        ResizeEdge::TopRight | ResizeEdge::BottomLeft => IDC_SIZENESW,
+    };
+    unsafe {
+        SetCursor(LoadCursorW(std::ptr::null_mut(), idc));
+    }
+}
+
+unsafe fn begin_resize(hwnd: HWND, edge: ResizeEdge) {
+    let mut point: POINT = std::mem::zeroed();
+    let mut rect: RECT = std::mem::zeroed();
+    if GetCursorPos(&mut point) == 0 || GetWindowRect(hwnd, &mut rect) == 0 {
+        return;
+    }
+    DRAG_CURSOR_X.store(point.x, Ordering::SeqCst);
+    DRAG_CURSOR_Y.store(point.y, Ordering::SeqCst);
+    DRAG_WINDOW_X.store(rect.left, Ordering::SeqCst);
+    DRAG_WINDOW_Y.store(rect.top, Ordering::SeqCst);
+    RESIZE_START_W.store(rect.right.saturating_sub(rect.left), Ordering::SeqCst);
+    RESIZE_START_H.store(rect.bottom.saturating_sub(rect.top), Ordering::SeqCst);
+    RESIZE_START_SCALE.store(BUBBLE_SCALE.load(Ordering::SeqCst), Ordering::SeqCst);
+    RESIZE_EDGE.store(edge_code(edge), Ordering::SeqCst);
+    DRAG_STARTED.store(false, Ordering::SeqCst);
+    DRAG_ACTIVE.store(true, Ordering::SeqCst);
+    set_resize_cursor(edge);
+    SetCapture(hwnd);
+}
+
 unsafe fn begin_drag(hwnd: HWND) {
     let mut point: POINT = std::mem::zeroed();
     let mut rect: RECT = std::mem::zeroed();
@@ -344,6 +427,7 @@ unsafe fn begin_drag(hwnd: HWND) {
     DRAG_CURSOR_Y.store(point.y, Ordering::SeqCst);
     DRAG_WINDOW_X.store(rect.left, Ordering::SeqCst);
     DRAG_WINDOW_Y.store(rect.top, Ordering::SeqCst);
+    RESIZE_EDGE.store(0, Ordering::SeqCst);
     DRAG_STARTED.store(false, Ordering::SeqCst);
     DRAG_ACTIVE.store(true, Ordering::SeqCst);
     SetCapture(hwnd);
@@ -370,14 +454,78 @@ unsafe fn drag_to_cursor(hwnd: HWND) {
     SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
-/// 结束拖动；松开鼠标时先把窗口夹回最近显示器的工作区，再通知主窗口保存坐标。
+unsafe fn resize_to_cursor(hwnd: HWND) {
+    let Some(edge) = edge_from_code(RESIZE_EDGE.load(Ordering::SeqCst)) else {
+        return;
+    };
+    if !DRAG_ACTIVE.load(Ordering::SeqCst) || GetCapture() != hwnd {
+        return;
+    }
+    let mut point: POINT = std::mem::zeroed();
+    if GetCursorPos(&mut point) == 0 {
+        return;
+    }
+    let dx = point.x.saturating_sub(DRAG_CURSOR_X.load(Ordering::SeqCst));
+    let dy = point.y.saturating_sub(DRAG_CURSOR_Y.load(Ordering::SeqCst));
+    if !DRAG_STARTED.load(Ordering::SeqCst) {
+        if dx.saturating_abs().max(dy.saturating_abs()) < DRAG_THRESHOLD {
+            return;
+        }
+        DRAG_STARTED.store(true, Ordering::SeqCst);
+    }
+    set_resize_cursor(edge);
+    let start_w = RESIZE_START_W.load(Ordering::SeqCst);
+    let start_h = RESIZE_START_H.load(Ordering::SeqCst);
+    let dpi = dpi_for_window(hwnd);
+    let (base_w, base_h) = view::bubble_size(dpi, 100);
+    let scale = view::scale_from_resize(edge, start_w, start_h, dx, dy, base_w, base_h);
+    if scale == BUBBLE_SCALE.load(Ordering::SeqCst) {
+        return;
+    }
+    BUBBLE_SCALE.store(scale, Ordering::SeqCst);
+    SCALE_PENDING.store(true, Ordering::SeqCst);
+    let (width, height) = view::bubble_size(dpi, scale);
+    let start = BubbleRect {
+        x: DRAG_WINDOW_X.load(Ordering::SeqCst),
+        y: DRAG_WINDOW_Y.load(Ordering::SeqCst),
+        width: start_w,
+        height: start_h,
+    };
+    let (x, y) = view::resized_origin(edge, start, width, height);
+    SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE);
+    InvalidateRect(hwnd, std::ptr::null(), 0);
+}
+
+/// 结束拖动或缩放；松开鼠标时先把窗口夹回最近显示器的工作区，再通知主窗口保存。
 unsafe fn finish_drag(hwnd: HWND, release: bool) {
+    let edge = RESIZE_EDGE.swap(0, Ordering::SeqCst);
     let moved = DRAG_STARTED.swap(false, Ordering::SeqCst);
     let was_active = DRAG_ACTIVE.swap(false, Ordering::SeqCst);
+    let start_x = DRAG_WINDOW_X.load(Ordering::SeqCst);
+    let start_y = DRAG_WINDOW_Y.load(Ordering::SeqCst);
+    let start_scale = RESIZE_START_SCALE.load(Ordering::SeqCst);
     if release && GetCapture() == hwnd {
         ReleaseCapture();
     }
-    if was_active && moved {
+    if !was_active {
+        return;
+    }
+    if edge != 0 {
+        let clamped = clamp_window(hwnd);
+        let mut rect: RECT = std::mem::zeroed();
+        if GetWindowRect(hwnd, &mut rect) != 0
+            && (rect.left != start_x || rect.top != start_y || clamped)
+        {
+            notify_moved(hwnd);
+        }
+        let scale = BUBBLE_SCALE.load(Ordering::SeqCst);
+        if scale != start_scale {
+            SCALE_PENDING.store(true, Ordering::SeqCst);
+            notify_scaled(scale);
+        } else {
+            SCALE_PENDING.store(false, Ordering::SeqCst);
+        }
+    } else if moved {
         // 普通拖动也必须保存，不能仅在夹取改变坐标时通知。
         clamp_window(hwnd);
         notify_moved(hwnd);
@@ -394,6 +542,7 @@ unsafe fn cancel_drag(hwnd: HWND) {
 fn reset_drag_state() {
     DRAG_ACTIVE.store(false, Ordering::SeqCst);
     DRAG_STARTED.store(false, Ordering::SeqCst);
+    RESIZE_EDGE.store(0, Ordering::SeqCst);
 }
 
 unsafe fn clamp_window(hwnd: HWND) -> bool {
@@ -429,6 +578,40 @@ unsafe fn notify_moved(hwnd: HWND) {
             rect.left as WPARAM,
             rect.top as LPARAM,
         );
+    }
+}
+
+unsafe fn notify_scaled(scale: u32) {
+    let main = MAIN_HWND.load(Ordering::SeqCst);
+    if main != 0 {
+        PostMessageW(main as HWND, super::WM_BUBBLE_SCALED, scale as WPARAM, 0);
+    }
+}
+
+const fn edge_code(edge: ResizeEdge) -> u32 {
+    match edge {
+        ResizeEdge::Left => 1,
+        ResizeEdge::Right => 2,
+        ResizeEdge::Top => 3,
+        ResizeEdge::Bottom => 4,
+        ResizeEdge::TopLeft => 5,
+        ResizeEdge::TopRight => 6,
+        ResizeEdge::BottomLeft => 7,
+        ResizeEdge::BottomRight => 8,
+    }
+}
+
+const fn edge_from_code(code: u32) -> Option<ResizeEdge> {
+    match code {
+        1 => Some(ResizeEdge::Left),
+        2 => Some(ResizeEdge::Right),
+        3 => Some(ResizeEdge::Top),
+        4 => Some(ResizeEdge::Bottom),
+        5 => Some(ResizeEdge::TopLeft),
+        6 => Some(ResizeEdge::TopRight),
+        7 => Some(ResizeEdge::BottomLeft),
+        8 => Some(ResizeEdge::BottomRight),
+        _ => None,
     }
 }
 
