@@ -24,7 +24,7 @@ use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::{merge_into_ini, BubblePosition, Config, ConfigPatch};
+use crate::config::{merge_into_ini, BubblePosition, Config, ConfigPatch, BUBBLE_SCALE_RANGE};
 use crate::schedule::{Event, Phase, Schedule};
 use crate::view;
 
@@ -37,6 +37,7 @@ const STARTUP_RETRY_LIMIT: u32 = 10;
 pub const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 pub const WM_EMERGENCY_UNLOCK: u32 = WM_APP + 2;
 pub const WM_BUBBLE_MOVED: u32 = WM_APP + 3;
+pub const WM_BUBBLE_SCALED: u32 = WM_APP + 4;
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 static MENU_OPEN: AtomicBool = AtomicBool::new(false);
@@ -688,6 +689,12 @@ impl App {
             }
             WM_BUBBLE_MOVED => {
                 self.save_bubble_position(wparam as i32, lparam as i32);
+                WndOutcome::Handled(0)
+            }
+            WM_BUBBLE_SCALED => {
+                let scale =
+                    (wparam as u32).clamp(*BUBBLE_SCALE_RANGE.start(), *BUBBLE_SCALE_RANGE.end());
+                self.set_bubble_scale(scale);
                 WndOutcome::Handled(0)
             }
             WM_DISPLAYCHANGE => {

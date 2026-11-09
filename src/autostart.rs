@@ -54,9 +54,15 @@ mod tests {
         assert_eq!(VALUE_NAME, "Liftly");
         let exe = r"C:\Program Files\Liftly\liftly.exe";
         let command = run_command(exe);
-        assert_eq!(command, r#""C:\Program Files\Liftly\liftly.exe" --autostart"#);
+        assert_eq!(
+            command,
+            r#""C:\Program Files\Liftly\liftly.exe" --autostart"#
+        );
         assert!(command_targets(&command, exe));
-        assert!(command_targets(&command, r"c:\program files\liftly\LIFTLY.EXE"));
+        assert!(command_targets(
+            &command,
+            r"c:\program files\liftly\LIFTLY.EXE"
+        ));
     }
 
     #[test]
@@ -97,7 +103,12 @@ mod tests {
     fn detects_autostart_argument() {
         assert!(is_autostart_launch(["--autostart".to_owned()].into_iter()));
         assert!(is_autostart_launch(
-            ["--work".to_owned(), "45".to_owned(), "--autostart".to_owned()].into_iter()
+            [
+                "--work".to_owned(),
+                "45".to_owned(),
+                "--autostart".to_owned()
+            ]
+            .into_iter()
         ));
         assert!(!is_autostart_launch(
             ["--work".to_owned(), "45".to_owned()].into_iter()

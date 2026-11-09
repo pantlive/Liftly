@@ -72,7 +72,10 @@ fn read_run_command() -> Option<String> {
         if status == ERROR_SUCCESS {
             let units = (size as usize / 2).min(buf.len());
             let text = &buf[..units];
-            let end = text.iter().position(|&unit| unit == 0).unwrap_or(text.len());
+            let end = text
+                .iter()
+                .position(|&unit| unit == 0)
+                .unwrap_or(text.len());
             return Some(String::from_utf16_lossy(&text[..end]));
         }
         if status != ERROR_MORE_DATA {
