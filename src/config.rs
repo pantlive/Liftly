@@ -13,6 +13,10 @@ pub const WARN_MAX: u32 = 600;
 pub const WORK_PRESETS: [u32; 5] = [25, 30, 45, 60, 90];
 pub const BREAK_PRESETS: [u32; 4] = [3, 5, 10, 15];
 pub const WARN_PRESETS: [u32; 4] = [0, 30, 60, 120];
+/// 气泡大小百分比的合法范围。
+pub const BUBBLE_SCALE_RANGE: RangeInclusive<u32> = 50..=300;
+/// 托盘菜单的气泡大小预设档位。
+pub const BUBBLE_SCALE_PRESETS: [u32; 5] = [80, 100, 125, 150, 200];
 
 /// 倒计时气泡的保存位置；`Auto` 使用工作区右上角。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -52,6 +56,7 @@ pub struct ConfigPatch {
     pub emergency_unlock: Option<bool>,
     pub show_bubble: Option<bool>,
     pub bubble_position: Option<BubblePosition>,
+    pub bubble_scale: Option<u32>,
 }
 
 impl ConfigPatch {
@@ -64,6 +69,7 @@ impl ConfigPatch {
             "emergency_unlock" => self.emergency_unlock.is_some(),
             "show_bubble" => self.show_bubble.is_some(),
             "bubble_position" => self.bubble_position.is_some(),
+            "bubble_scale" => self.bubble_scale.is_some(),
             _ => false,
         }
     }
@@ -80,7 +86,7 @@ pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, Str
 }
 
 /// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
-const INI_KEYS: [&str; 7] = [
+const INI_KEYS: [&str; 8] = [
     "work_minutes",
     "break_minutes",
     "warn_seconds",
@@ -88,9 +94,10 @@ const INI_KEYS: [&str; 7] = [
     "emergency_unlock",
     "show_bubble",
     "bubble_position",
+    "bubble_scale",
 ];
 
-const INI_COMMENTS: [&str; 7] = [
+const INI_COMMENTS: [&str; 8] = [
     "# 工作时长（分钟），1-600",
     "# 休息时长（分钟），1-120",
     "# 锁定前提醒秒数，0-600；0 表示不提醒",
@@ -98,6 +105,7 @@ const INI_COMMENTS: [&str; 7] = [
     "# 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁",
     "# 是否显示桌面倒计时气泡",
     "# 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存",
+    "# 气泡大小百分比，50-300；100 为标准大小",
 ];
 
 /// 运行时配置。
@@ -110,6 +118,7 @@ pub struct Config {
     pub emergency_unlock: bool,
     pub show_bubble: bool,
     pub bubble_position: BubblePosition,
+    pub bubble_scale: u32,
 }
 
 impl Default for Config {
@@ -122,6 +131,7 @@ impl Default for Config {
             emergency_unlock: true,
             show_bubble: true,
             bubble_position: BubblePosition::Auto,
+            bubble_scale: 100,
         }
     }
 }
@@ -138,6 +148,16 @@ impl Config {
         cfg.emergency_unlock = patch.emergency_unlock.unwrap_or(self.emergency_unlock);
         cfg.show_bubble = patch.show_bubble.unwrap_or(self.show_bubble);
         cfg.bubble_position = patch.bubble_position.unwrap_or(self.bubble_position);
+        if let Some(scale) = patch.bubble_scale {
+            if !BUBBLE_SCALE_RANGE.contains(&scale) {
+                return Err(format!(
+                    "气泡大小必须在 {}% 到 {}% 之间",
+                    BUBBLE_SCALE_RANGE.start(),
+                    BUBBLE_SCALE_RANGE.end()
+                ));
+            }
+            cfg.bubble_scale = scale;
+        }
         Ok(cfg)
     }
 
@@ -231,6 +251,13 @@ impl Config {
             "bubble_position" => {
                 if let Some(v) = BubblePosition::parse(value) {
                     self.bubble_position = v;
+                }
+            }
+            "bubble_scale" => {
+                if let Ok(v) = value.parse::<u32>() {
+                    if BUBBLE_SCALE_RANGE.contains(&v) {
+                        self.bubble_scale = v;
+                    }
                 }
             }
             _ => {}
@@ -372,6 +399,7 @@ impl Config {
                 BubblePosition::Auto => "auto".to_owned(),
                 BubblePosition::At(x, y) => format!("{x},{y}"),
             },
+            "bubble_scale" => self.bubble_scale.to_string(),
             _ => String::new(),
         }
     }
@@ -413,9 +441,13 @@ mod tests {
         assert!(WORK_PRESETS.iter().all(|v| WORK_RANGE.contains(v)));
         assert!(BREAK_PRESETS.iter().all(|v| BREAK_RANGE.contains(v)));
         assert!(WARN_PRESETS.iter().all(|v| *v <= WARN_MAX));
+        assert!(BUBBLE_SCALE_PRESETS
+            .iter()
+            .all(|v| BUBBLE_SCALE_RANGE.contains(v)));
         assert!(WORK_PRESETS.contains(&cfg.work_minutes));
         assert!(BREAK_PRESETS.contains(&cfg.break_minutes));
         assert!(WARN_PRESETS.contains(&cfg.warn_seconds));
+        assert!(BUBBLE_SCALE_PRESETS.contains(&cfg.bubble_scale));
     }
 
     #[test]
@@ -442,7 +474,7 @@ mod tests {
 
     #[test]
     fn merge_keeps_untouched_raw_values_and_formatting() {
-        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\nbubble_position=auto\r\n";
+        let original = "WORK_MINUTES=1\r\nbreak_minutes = 5\r\nwarn_seconds=120 # 启动时截断\r\nreset_on_unlock=no\r\nemergency_unlock=on\r\nshow_bubble=yes\r\nbubble_position=auto\r\nbubble_scale=100\r\n";
         let patch = ConfigPatch {
             break_minutes: Some(10),
             ..ConfigPatch::default()
@@ -494,6 +526,20 @@ mod tests {
                 },
                 "提醒秒数",
             ),
+            (
+                ConfigPatch {
+                    bubble_scale: Some(49),
+                    ..ConfigPatch::default()
+                },
+                "气泡大小",
+            ),
+            (
+                ConfigPatch {
+                    bubble_scale: Some(301),
+                    ..ConfigPatch::default()
+                },
+                "气泡大小",
+            ),
         ] {
             assert!(merge_into_ini("", &patch).unwrap_err().contains(message));
         }
@@ -509,6 +555,7 @@ mod tests {
         assert!(cfg.emergency_unlock);
         assert!(cfg.show_bubble);
         assert_eq!(cfg.bubble_position, BubblePosition::Auto);
+        assert_eq!(cfg.bubble_scale, 100);
     }
 
     #[test]
@@ -522,7 +569,8 @@ mod tests {
              reset_on_unlock = false\n\
              emergency_unlock = no\n\
              show_bubble = off\n\
-             bubble_position = 1200,80\n",
+             bubble_position = 1200,80\n\
+             bubble_scale = 150\n",
         );
         assert_eq!(cfg.work_minutes, 30);
         assert_eq!(cfg.break_minutes, 10);
@@ -531,6 +579,7 @@ mod tests {
         assert!(!cfg.emergency_unlock);
         assert!(!cfg.show_bubble);
         assert_eq!(cfg.bubble_position, BubblePosition::At(1200, 80));
+        assert_eq!(cfg.bubble_scale, 150);
     }
 
     #[test]
@@ -543,7 +592,9 @@ mod tests {
              reset_on_unlock = maybe\n\
              emergency_unlock = 2\n\
              show_bubble = sometimes\n\
-             bubble_position = 12,abc\n",
+             bubble_position = 12,abc\n\
+             bubble_scale = abc\n\
+             bubble_scale = 999\n",
         );
         assert_eq!(cfg, Config::default());
     }
@@ -582,7 +633,7 @@ mod tests {
 
     #[test]
     fn saving_bubble_position_only_touches_that_key() {
-        let original = "work_minutes=37\nbreak_minutes = 5\nwarn_seconds=120\nreset_on_unlock=no\nemergency_unlock=on\nshow_bubble=yes\nbubble_position=auto\n";
+        let original = "work_minutes=37\nbreak_minutes = 5\nwarn_seconds=120\nreset_on_unlock=no\nemergency_unlock=on\nshow_bubble=yes\nbubble_position=auto\nbubble_scale=100\n";
         let runtime = Config::parse_ini(original);
         let patch = ConfigPatch {
             bubble_position: Some(BubblePosition::At(1200, 80)),
@@ -627,12 +678,44 @@ mod tests {
         let saved_text = merge_into_ini(original, &patch).unwrap();
         // 新位置键可以追加到旧文件，已有 BOM、换行、键名、别名和时长均保留。
         assert!(saved_text.starts_with(original));
-        assert!(saved_text.ends_with("bubble_position = -1200,-80\r\n"));
+        assert!(saved_text.contains("bubble_position = -1200,-80\r\n"));
+        assert!(saved_text.ends_with("bubble_scale = 100\r\n"));
         let cfg = Config::parse_ini(&saved_text);
         assert_eq!(cfg.bubble_position, BubblePosition::At(-1200, -80));
         assert_eq!(cfg.work_minutes, 37);
         assert_eq!(cfg.warn_seconds, 120);
         assert!(!cfg.reset_on_unlock);
+    }
+
+    #[test]
+    fn bubble_scale_parses_valid_percent_and_ignores_invalid() {
+        assert_eq!(Config::default().bubble_scale, 100);
+        assert_eq!(Config::parse_ini("bubble_scale = 80\n").bubble_scale, 80);
+        assert_eq!(Config::parse_ini("bubble_scale = 300\n").bubble_scale, 300);
+        for value in ["abc", "999", "0", "49", "301", ""] {
+            let cfg = Config::parse_ini(&format!("bubble_scale = {value}\n"));
+            assert_eq!(cfg.bubble_scale, 100, "value={value}");
+        }
+    }
+
+    #[test]
+    fn patching_bubble_scale_saves_only_that_key() {
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = auto\nbubble_scale = 100\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            bubble_scale: Some(150),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        assert_eq!(applied.bubble_scale, 150);
+        assert_eq!(applied.work_minutes, 37);
+
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert_eq!(
+            saved_text,
+            original.replace("bubble_scale = 100", "bubble_scale = 150")
+        );
+        assert_eq!(Config::parse_ini(&saved_text), applied);
     }
 
     #[test]
@@ -810,6 +893,8 @@ mod tests {
         assert!(text.contains("show_bubble = true"));
         assert!(text.contains("# 气泡位置：auto（工作区右上角）或 x,y"));
         assert!(text.contains("bubble_position = auto"));
+        assert!(text.contains("# 气泡大小百分比，50-300；100 为标准大小"));
+        assert!(text.contains("bubble_scale = 100"));
         assert!(text.ends_with('\n'));
         assert_eq!(Config::parse_ini(&text), cfg);
     }
@@ -858,9 +943,11 @@ mod tests {
             emergency_unlock: false,
             show_bubble: true,
             bubble_position: BubblePosition::At(-500, 20),
+            bubble_scale: 150,
         };
         let text = cfg.to_ini_text("work_minutes = 10\nunknown = value # 注释\n");
         assert!(text.contains("bubble_position = -500,20"));
+        assert!(text.contains("bubble_scale = 150"));
         assert_eq!(Config::parse_ini(&text), cfg);
     }
 }

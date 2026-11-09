@@ -174,6 +174,7 @@ unsafe fn read_patch(hwnd: HWND, initial: &Config) -> Result<ConfigPatch, String
         emergency_unlock: (emergency != initial.emergency_unlock).then_some(emergency),
         show_bubble: None,
         bubble_position: None,
+        bubble_scale: None,
     })
 }
 

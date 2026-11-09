@@ -10,12 +10,12 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, GetSystemMetrics, PostMessageW,
-    SetForegroundWindow, TrackPopupMenu, HMENU, MF_CHECKED, MF_POPUP, MF_SEPARATOR, MF_STRING,
-    SM_CXSMICON, SM_CYSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
+    SetForegroundWindow, TrackPopupMenu, HMENU, MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, SM_CXSMICON, SM_CYSMICON, TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NULL,
 };
 
 use super::{wide, AppIcon, WM_TRAY_CALLBACK};
-use crate::config::{Config, BREAK_PRESETS, WARN_PRESETS, WORK_PRESETS};
+use crate::config::{Config, BREAK_PRESETS, BUBBLE_SCALE_PRESETS, WARN_PRESETS, WORK_PRESETS};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -23,6 +23,7 @@ pub enum MenuAction {
     TogglePause,
     Restart,
     ToggleBubble,
+    SetBubbleScale(u32),
     SetWork(u32),
     SetBreak(u32),
     SetWarn(u32),
@@ -36,6 +37,7 @@ const ID_RESTART: usize = 3;
 const ID_SETTINGS: usize = 4;
 const ID_EXIT: usize = 5;
 const ID_TOGGLE_BUBBLE: usize = 6;
+const ID_BUBBLE_SCALE_BASE: usize = 400;
 
 pub struct Tray {
     nid: NOTIFYICONDATAW,
@@ -182,6 +184,10 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             ID_TOGGLE_BUBBLE,
             wide("显示桌面倒计时").as_ptr(),
         );
+        if !append_bubble_scale(menu, cfg.bubble_scale) {
+            DestroyMenu(menu);
+            return None;
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         // 子菜单挂到父菜单后由父菜单统一释放，失败时只销毁尚未挂接的句柄。
         for (label, presets, current, base, unit) in [
@@ -250,6 +256,13 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             id if (300..300 + WARN_PRESETS.len()).contains(&id) => {
                 Some(MenuAction::SetWarn(WARN_PRESETS[id - 300]))
             }
+            id if (ID_BUBBLE_SCALE_BASE..ID_BUBBLE_SCALE_BASE + BUBBLE_SCALE_PRESETS.len())
+                .contains(&id) =>
+            {
+                Some(MenuAction::SetBubbleScale(
+                    BUBBLE_SCALE_PRESETS[id - ID_BUBBLE_SCALE_BASE],
+                ))
+            }
             _ => None,
         }
     }
@@ -294,6 +307,53 @@ unsafe fn append_presets(
     ) == 0
         || AppendMenuW(parent, MF_POPUP, menu as usize, wide(label).as_ptr()) == 0
     {
+        DestroyMenu(menu);
+        return false;
+    }
+    true
+}
+
+/// 气泡大小子菜单；自定义 INI 值单独置灰展示，避免误映射到设置窗口。
+unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return false;
+    }
+    const LABELS: [&str; 5] = [
+        "小（80%）",
+        "标准（100%）",
+        "大（125%）",
+        "较大（150%）",
+        "特大（200%）",
+    ];
+    const _: () = assert!(BUBBLE_SCALE_PRESETS.len() == LABELS.len());
+    for (index, value) in BUBBLE_SCALE_PRESETS.iter().enumerate() {
+        let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
+        if AppendMenuW(
+            menu,
+            flags,
+            ID_BUBBLE_SCALE_BASE + index,
+            wide(LABELS[index]).as_ptr(),
+        ) == 0
+        {
+            DestroyMenu(menu);
+            return false;
+        }
+    }
+    if !BUBBLE_SCALE_PRESETS.contains(&current) {
+        let text = format!("当前（{current}%，来自 liftly.ini）");
+        if AppendMenuW(
+            menu,
+            MF_STRING | MF_GRAYED | MF_CHECKED,
+            ID_BUBBLE_SCALE_BASE + BUBBLE_SCALE_PRESETS.len(),
+            wide(&text).as_ptr(),
+        ) == 0
+        {
+            DestroyMenu(menu);
+            return false;
+        }
+    }
+    if AppendMenuW(parent, MF_POPUP, menu as usize, wide("气泡大小").as_ptr()) == 0 {
         DestroyMenu(menu);
         return false;
     }

@@ -1,5 +1,6 @@
 //! 仅包含可跨平台测试的展示逻辑，供 Windows 倒计时气泡使用。
 
+use crate::config::BUBBLE_SCALE_RANGE;
 use crate::schedule::Phase;
 
 /// 倒计时气泡在 96 DPI 下的基准宽度。
@@ -56,7 +57,16 @@ pub fn scale_for_dpi(value: i32, dpi: u32) -> i32 {
     (value.saturating_mul(dpi).saturating_add(48)) / 96
 }
 
-pub fn bubble_size(dpi: u32) -> (i32, i32) {
+/// 把真实 DPI 和用户缩放百分比合成气泡绘制用的有效 DPI。
+/// `dpi` 为 0 时按 96 处理；缩放百分比夹到合法范围；结果至少为 1。
+pub fn bubble_dpi(dpi: u32, scale_percent: u32) -> u32 {
+    let dpi = if dpi == 0 { 96 } else { dpi };
+    let scale = scale_percent.clamp(*BUBBLE_SCALE_RANGE.start(), *BUBBLE_SCALE_RANGE.end());
+    (dpi.saturating_mul(scale).saturating_add(50) / 100).max(1)
+}
+
+pub fn bubble_size(dpi: u32, scale: u32) -> (i32, i32) {
+    let dpi = bubble_dpi(dpi, scale);
     (
         scale_for_dpi(BUBBLE_BASE_WIDTH, dpi).max(1),
         scale_for_dpi(BUBBLE_BASE_HEIGHT, dpi).max(1),
@@ -86,8 +96,9 @@ pub fn clamp_bubble_position(
 }
 
 /// 计算气泡位置：没有保存坐标时放在工作区右上角，有保存坐标时只做可见性夹取。
-pub fn bubble_rect(dpi: u32, work: WorkArea, saved: Option<(i32, i32)>) -> BubbleRect {
-    let (width, height) = bubble_size(dpi);
+/// 尺寸跟随缩放百分比，距边缘的 margin 仍按真实 DPI 计算。
+pub fn bubble_rect(dpi: u32, scale: u32, work: WorkArea, saved: Option<(i32, i32)>) -> BubbleRect {
+    let (width, height) = bubble_size(dpi, scale);
     let margin = bubble_margin(dpi);
     let (x, y) = saved.unwrap_or_else(|| {
         (
@@ -175,7 +186,7 @@ mod tests {
             (144, (270, 63), 24),
             (192, (360, 84), 32),
         ] {
-            assert_eq!(bubble_size(dpi), size, "dpi={dpi}");
+            assert_eq!(bubble_size(dpi, 100), size, "dpi={dpi}");
             assert_eq!(bubble_margin(dpi), margin, "dpi={dpi}");
         }
     }
@@ -184,7 +195,7 @@ mod tests {
     fn default_position_is_top_right_of_primary_work_area() {
         let area = work(0, 0, 1920, 1040);
         assert_eq!((area.width(), area.height()), (1920, 1040));
-        let rect = bubble_rect(96, area, None);
+        let rect = bubble_rect(96, 100, area, None);
         assert_eq!(
             rect,
             BubbleRect {
@@ -195,14 +206,14 @@ mod tests {
             }
         );
         // 高 DPI 下按缩放后的尺寸和边距重新计算。
-        let rect = bubble_rect(144, work(0, 0, 1920, 1040), None);
+        let rect = bubble_rect(144, 100, work(0, 0, 1920, 1040), None);
         assert_eq!(rect.x, 1920 - 270 - 24);
         assert_eq!(rect.y, 24);
     }
 
     #[test]
     fn saved_position_is_kept_when_it_is_visible() {
-        let rect = bubble_rect(96, work(0, 0, 1920, 1040), Some((1200, 80)));
+        let rect = bubble_rect(96, 100, work(0, 0, 1920, 1040), Some((1200, 80)));
         assert_eq!((rect.x, rect.y), (1200, 80));
     }
 
@@ -210,7 +221,7 @@ mod tests {
     fn saved_position_is_clamped_to_work_area() {
         let area = work(0, 0, 1920, 1040);
         assert_eq!(
-            bubble_rect(96, area, Some((5000, 5000))),
+            bubble_rect(96, 100, area, Some((5000, 5000))),
             BubbleRect {
                 x: 1740,
                 y: 998,
@@ -220,8 +231,8 @@ mod tests {
         );
         assert_eq!(
             (
-                bubble_rect(96, area, Some((-5000, -5000))).x,
-                bubble_rect(96, area, Some((-5000, -5000))).y
+                bubble_rect(96, 100, area, Some((-5000, -5000))).x,
+                bubble_rect(96, 100, area, Some((-5000, -5000))).y
             ),
             (0, 0)
         );
@@ -231,33 +242,33 @@ mod tests {
     fn negative_secondary_monitor_coordinates_are_supported() {
         let area = work(-1920, 0, 0, 1040);
         // 副屏在主屏左侧时，默认位置和副屏上的坐标都保持负数。
-        let default = bubble_rect(96, area, None);
+        let default = bubble_rect(96, 100, area, None);
         assert_eq!((default.x, default.y), (-196, 16));
-        let saved = bubble_rect(96, area, Some((-1000, 100)));
+        let saved = bubble_rect(96, 100, area, Some((-1000, 100)));
         assert_eq!((saved.x, saved.y), (-1000, 100));
-        let offscreen = bubble_rect(96, area, Some((-3000, -100)));
+        let offscreen = bubble_rect(96, 100, area, Some((-3000, -100)));
         assert_eq!((offscreen.x, offscreen.y), (-1920, 0));
     }
 
     #[test]
     fn tiny_work_area_keeps_origin_and_size() {
-        let rect = bubble_rect(96, work(0, 0, 100, 40), None);
+        let rect = bubble_rect(96, 100, work(0, 0, 100, 40), None);
         assert_eq!((rect.x, rect.y), (0, 0));
         assert_eq!((rect.width, rect.height), (180, 42));
-        let rect = bubble_rect(96, work(100, 100, 100, 100), Some((120, 130)));
+        let rect = bubble_rect(96, 100, work(100, 100, 100, 100), Some((120, 130)));
         assert_eq!((rect.x, rect.y), (100, 100));
     }
 
     #[test]
     fn high_dpi_monitor_above_primary_keeps_negative_y() {
         let area = work(-1920, -1440, 640, 0);
-        let saved = bubble_rect(192, area, Some((-800, -900)));
+        let saved = bubble_rect(192, 100, area, Some((-800, -900)));
         assert_eq!((saved.x, saved.y), (-800, -900));
         assert_eq!((saved.width, saved.height), (360, 84));
         // 上方副屏边缘的坐标按缩放后的尺寸夹取，不能裁掉卡片。
-        let edge = bubble_rect(192, area, Some((600, -10)));
+        let edge = bubble_rect(192, 100, area, Some((600, -10)));
         assert_eq!((edge.x, edge.y), (280, -84));
-        let default = bubble_rect(192, area, None);
+        let default = bubble_rect(192, 100, area, None);
         assert_eq!((default.x, default.y), (248, -1408));
     }
 
@@ -274,13 +285,73 @@ mod tests {
         for dpi in [96, 120, 144, 192] {
             // 对不同缩放下的默认位置和越界保存位置都检查完整可见性。
             for saved in [None, Some((-1, -1)), Some((-5000, -5000))] {
-                let rect = bubble_rect(dpi, area, saved);
+                let rect = bubble_rect(dpi, 100, area, saved);
                 assert!(rect.x >= area.left && rect.x + rect.width <= area.right);
                 assert!(rect.y >= area.top && rect.y + rect.height <= area.bottom);
             }
-            let tiny = bubble_rect(dpi, work(-100, -20, 0, 0), Some((10, 10)));
+            let tiny = bubble_rect(dpi, 100, work(-100, -20, 0, 0), Some((10, 10)));
             assert_eq!((tiny.x, tiny.y), (-100, -20), "dpi={dpi}");
-            assert_eq!((tiny.width, tiny.height), bubble_size(dpi));
+            assert_eq!((tiny.width, tiny.height), bubble_size(dpi, 100));
         }
+    }
+
+    #[test]
+    fn bubble_scale_100_matches_base_size() {
+        assert_eq!(bubble_size(96, 100), (180, 42));
+        assert_eq!(bubble_size(0, 100), bubble_size(96, 100));
+        assert_eq!(bubble_dpi(0, 100), 96);
+        assert_eq!(bubble_dpi(96, 100), 96);
+    }
+
+    #[test]
+    fn bubble_scale_resizes_at_96_dpi() {
+        assert_eq!(bubble_size(96, 150), (270, 63));
+        assert_eq!(bubble_size(96, 50), (90, 21));
+    }
+
+    #[test]
+    fn bubble_scale_out_of_range_is_clamped() {
+        assert_eq!(bubble_dpi(96, 49), bubble_dpi(96, 50));
+        assert_eq!(bubble_dpi(96, 301), bubble_dpi(96, 300));
+        assert_eq!(bubble_size(96, 0), bubble_size(96, 50));
+        assert_eq!(bubble_size(96, 999), bubble_size(96, 300));
+    }
+
+    #[test]
+    fn scaled_auto_position_stays_top_right_with_unscaled_margin() {
+        let area = work(0, 0, 1920, 1040);
+        let rect = bubble_rect(96, 150, area, None);
+        assert_eq!(
+            rect,
+            BubbleRect {
+                x: 1920 - 270 - 16,
+                y: 16,
+                width: 270,
+                height: 63,
+            }
+        );
+        assert!(rect.x >= area.left && rect.x + rect.width <= area.right);
+        assert!(rect.y >= area.top && rect.y + rect.height <= area.bottom);
+    }
+
+    #[test]
+    fn scaled_bubble_rect_stays_within_work_area() {
+        let area = work(-1920, -1080, 0, 0);
+        for scale in [50, 80, 100, 125, 150, 200, 300, 999] {
+            for saved in [None, Some((-1, -1)), Some((-5000, -5000))] {
+                let rect = bubble_rect(96, scale, area, saved);
+                assert!(
+                    rect.x >= area.left && rect.x + rect.width <= area.right,
+                    "scale={scale} saved={saved:?} rect={rect:?}"
+                );
+                assert!(
+                    rect.y >= area.top && rect.y + rect.height <= area.bottom,
+                    "scale={scale} saved={saved:?} rect={rect:?}"
+                );
+            }
+        }
+        let saved = bubble_rect(96, 200, work(0, 0, 1920, 1040), Some((1800, 10)));
+        assert_eq!((saved.width, saved.height), (360, 84));
+        assert_eq!((saved.x, saved.y), (1560, 10));
     }
 }
