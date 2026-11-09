@@ -1,5 +1,6 @@
 //! Windows 专用实现：单实例、隐藏消息窗口、托盘、提醒弹窗、计时驱动与休息锁定。
 
+pub mod bubble;
 pub mod hooks;
 pub mod overlay;
 pub mod popup;
@@ -24,6 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{merge_into_ini, Config, ConfigPatch};
 use crate::schedule::{Event, Phase, Schedule};
+use crate::view;
 
 const MUTEX_NAME: &str = "Local\\Liftly.SingleInstance";
 const WINDOW_CLASS: &str = "Liftly.HiddenWindow";
@@ -130,9 +132,11 @@ pub fn run() {
             tray: tray::Tray::new(hwnd, "站会儿"),
             overlay: overlay::Overlay::new(),
             popup: popup::Popup::new(),
+            bubble: bubble::Bubble::new(),
             hooks: None,
             wts_registered: false,
             away: false,
+            locked: false,
             startup_attempts: 0,
         };
         APP.with(|cell| {
@@ -145,6 +149,7 @@ pub fn run() {
             if let Some(app) = cell.borrow_mut().as_mut() {
                 app.wts_registered = wts_ok;
                 app.update_tip(now);
+                app.sync_bubble(now);
                 app.arm_timer(now);
                 // 托盘图标和启动气泡等主循环开始后再处理，避免启动阶段弹窗阻塞初始化。
                 SetTimer(hwnd, STARTUP_TIMER_ID, 500, None);
@@ -320,9 +325,11 @@ struct App {
     tray: tray::Tray,
     overlay: overlay::Overlay,
     popup: popup::Popup,
+    bubble: bubble::Bubble,
     hooks: Option<hooks::Hooks>,
     wts_registered: bool,
     away: bool,
+    locked: bool,
     startup_attempts: u32,
 }
 
@@ -336,8 +343,14 @@ impl App {
         let now = now_ms();
         self.schedule.apply_config(&self.cfg, now);
         self.popup.hide();
+        self.sync_bubble(now);
         self.update_tip(now);
         self.arm_timer(now);
+        self.save_patch(&patch);
+    }
+
+    /// 只把本次用户修改的字段写回 INI；保存失败不影响本次运行。
+    fn save_patch(&mut self, patch: &ConfigPatch) {
         let saved = (|| -> Result<(), String> {
             let path = ini_path().map_err(|error| error.to_string())?;
             let original = match std::fs::read_to_string(&path) {
@@ -345,13 +358,32 @@ impl App {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
                 Err(error) => return Err(error.to_string()),
             };
-            let text = merge_into_ini(&original, &patch)?;
+            let text = merge_into_ini(&original, patch)?;
             std::fs::write(path, text).map_err(|error| error.to_string())
         })();
         if saved.is_err() {
             self.tray
                 .balloon("站会儿", "已生效，但没能保存到 liftly.ini");
         }
+    }
+
+    /// 气泡开关只影响显示和 1 秒刷新节奏，不重置计时，也不关闭提醒弹窗。
+    fn set_bubble_enabled(&mut self, enabled: bool) {
+        if self.cfg.show_bubble == enabled {
+            return;
+        }
+        let now = now_ms();
+        self.cfg.show_bubble = enabled;
+        if enabled {
+            self.bubble.reset_failure();
+        }
+        self.sync_bubble(now);
+        self.update_tip(now);
+        self.arm_timer(now);
+        self.save_patch(&ConfigPatch {
+            show_bubble: Some(enabled),
+            ..ConfigPatch::default()
+        });
     }
 
     fn update_tip(&mut self, now: u64) {
@@ -370,8 +402,33 @@ impl App {
         self.tray.update_tip(&tip);
     }
 
+    fn bubble_should_show(&self) -> bool {
+        view::bubble_visible(self.schedule.phase(), self.cfg.show_bubble, self.locked)
+    }
+
+    /// 工作且气泡可用时每秒刷新，暂停时保持静态文本。
+    fn sync_bubble(&mut self, now: u64) {
+        if !self.bubble_should_show() {
+            self.bubble.hide();
+            return;
+        }
+        if self.bubble.failed() {
+            return;
+        }
+        let remaining = self.schedule.remaining_ms(now);
+        let paused = self.schedule.phase() == Phase::Paused;
+        // 创建失败时静默降级，核心计时和托盘功能不受影响。
+        self.bubble.show(remaining, paused);
+    }
+
     fn arm_timer(&mut self, now: u64) {
-        let delay = self.schedule.next_wakeup_ms(now);
+        let mut delay = self.schedule.next_wakeup_ms(now);
+        if self.schedule.phase() == Phase::Working
+            && self.bubble_should_show()
+            && !self.bubble.failed()
+        {
+            delay = delay.min(1_000);
+        }
         unsafe {
             SetTimer(self.hwnd, TIMER_ID, delay, None);
         }
@@ -464,6 +521,7 @@ impl App {
             self.overlay.refresh();
         }
         self.update_tip(now);
+        self.sync_bubble(now);
         self.arm_timer(now);
     }
 
@@ -475,6 +533,7 @@ impl App {
             self.hooks = Some(hooks::install(self.hwnd, self.cfg.emergency_unlock));
         }
         self.update_tip(now);
+        self.sync_bubble(now);
     }
 
     fn break_now(&mut self) {
@@ -499,6 +558,7 @@ impl App {
         }
         self.popup.hide();
         self.update_tip(now);
+        self.sync_bubble(now);
         self.arm_timer(now);
     }
 
@@ -510,6 +570,7 @@ impl App {
         self.schedule.reset_work(now);
         self.popup.hide();
         self.update_tip(now);
+        self.sync_bubble(now);
         self.arm_timer(now);
     }
 
@@ -522,6 +583,7 @@ impl App {
         self.stop_break_resources();
         self.tray.balloon("站会儿", "休息结束，继续加油！");
         self.update_tip(now);
+        self.sync_bubble(now);
         self.arm_timer(now);
     }
 
@@ -530,6 +592,7 @@ impl App {
             let deadline = self.schedule.deadline_ms();
             self.overlay.rebuild(deadline, self.cfg.emergency_unlock);
         }
+        self.sync_bubble(now_ms());
     }
 
     fn stop_break_resources(&mut self) {
@@ -547,6 +610,7 @@ impl App {
         }
         self.stop_break_resources();
         self.popup.hide();
+        self.bubble.hide();
         self.tray.remove();
         if self.wts_registered {
             unsafe {
@@ -592,27 +656,32 @@ impl App {
                 WndOutcome::Handled(0)
             }
             WM_WTSSESSION_CHANGE => {
-                if self.cfg.reset_on_unlock {
-                    match wparam as u32 {
-                        // 只在正常工作时响应锁屏；手动暂停或休息中保持原状态。
-                        WTS_SESSION_LOCK if self.schedule.phase() == Phase::Working => {
-                            let now = now_ms();
+                let now = now_ms();
+                match wparam as u32 {
+                    WTS_SESSION_LOCK if !self.locked => {
+                        self.locked = true;
+                        // 锁屏始终隐藏气泡；是否暂停计时仍由 reset_on_unlock 决定。
+                        if self.cfg.reset_on_unlock && self.schedule.phase() == Phase::Working {
                             self.schedule.pause(now);
                             self.away = true;
                             self.popup.hide();
                             self.update_tip(now);
-                            self.arm_timer(now);
                         }
-                        WTS_SESSION_UNLOCK if self.away => {
-                            let now = now_ms();
+                        self.sync_bubble(now);
+                        self.arm_timer(now);
+                    }
+                    WTS_SESSION_UNLOCK if self.locked => {
+                        self.locked = false;
+                        if self.cfg.reset_on_unlock && self.away {
                             self.schedule.reset_work(now);
                             self.away = false;
                             self.popup.hide();
                             self.update_tip(now);
-                            self.arm_timer(now);
                         }
-                        _ => {}
+                        self.sync_bubble(now);
+                        self.arm_timer(now);
                     }
+                    _ => {}
                 }
                 WndOutcome::Handled(0)
             }
@@ -629,6 +698,7 @@ impl App {
                     self.schedule.reset_work(now);
                     self.popup.hide();
                     self.update_tip(now);
+                    self.sync_bubble(now);
                     self.arm_timer(now);
                 }
                 WndOutcome::Handled(1)
@@ -726,6 +796,10 @@ unsafe fn show_tray_menu(hwnd: HWND) {
             Some(tray::MenuAction::BreakNow) => app.break_now(),
             Some(tray::MenuAction::TogglePause) => app.toggle_pause(),
             Some(tray::MenuAction::Restart) => app.restart_work(),
+            Some(tray::MenuAction::ToggleBubble) => {
+                let enabled = !app.cfg.show_bubble;
+                app.set_bubble_enabled(enabled);
+            }
             Some(tray::MenuAction::SetWork(value)) => app.apply_patch(ConfigPatch {
                 work_minutes: Some(value),
                 ..ConfigPatch::default()

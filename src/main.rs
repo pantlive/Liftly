@@ -4,6 +4,8 @@
 mod config;
 #[cfg(any(windows, test))]
 mod schedule;
+#[cfg(any(windows, test))]
+mod view;
 
 #[cfg(test)]
 #[path = "../build/rsrc.rs"]

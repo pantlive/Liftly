@@ -16,3 +16,6 @@ reset_on_unlock = true
 
 # 是否允许同时按住 Ctrl、Alt、Shift（左右均可）再按 F12 紧急解锁
 emergency_unlock = true
+
+# 是否在桌面右上角显示倒计时气泡
+show_bubble = true

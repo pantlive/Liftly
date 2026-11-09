@@ -172,6 +172,7 @@ unsafe fn read_patch(hwnd: HWND, initial: &Config) -> Result<ConfigPatch, String
         warn_seconds: (values[2] != initial.warn_seconds).then_some(values[2]),
         reset_on_unlock: (reset != initial.reset_on_unlock).then_some(reset),
         emergency_unlock: (emergency != initial.emergency_unlock).then_some(emergency),
+        show_bubble: None,
     })
 }
 
