@@ -175,7 +175,7 @@ unsafe fn create_overlay_window(rect: RECT) -> HWND {
 
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class = wide(OVERLAY_CLASS);
-    let title = wide("站会儿");
+    let title = wide(crate::i18n::overlay_window_title(crate::i18n::current()));
     let hwnd = CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         class.as_ptr(),
@@ -268,8 +268,10 @@ unsafe fn paint(hwnd: HWND) {
     let countdown_size = (height / 20).clamp(20, 120);
     let hint_size = (height / 40).clamp(14, 60);
 
+    let lang = crate::i18n::current();
+    let title_text = crate::i18n::overlay_title(lang);
     let title = TextLine {
-        text: "站起来，活动一下！",
+        text: title_text,
         size: title_size,
         weight: FW_BOLD as i32,
         color: rgb(238, 243, 248),
@@ -280,8 +282,7 @@ unsafe fn paint(hwnd: HWND) {
     let remaining = BREAK_DEADLINE_MS
         .load(Ordering::SeqCst)
         .saturating_sub(GetTickCount64());
-    let total_seconds = remaining.div_ceil(1_000);
-    let countdown_text = format!("剩余 {:02}:{:02}", total_seconds / 60, total_seconds % 60);
+    let countdown_text = crate::i18n::overlay_countdown(lang, remaining);
     let countdown = TextLine {
         text: &countdown_text,
         size: countdown_size,
@@ -291,11 +292,7 @@ unsafe fn paint(hwnd: HWND) {
     };
     draw_line(memory_dc, &countdown, width);
 
-    let hint_text = if EMERGENCY_ENABLED.load(Ordering::SeqCst) {
-        "时间到后自动解锁 · 紧急解锁：Ctrl+Alt+Shift+F12"
-    } else {
-        "时间到后自动解锁"
-    };
+    let hint_text = crate::i18n::overlay_hint(lang, EMERGENCY_ENABLED.load(Ordering::SeqCst));
     let hint = TextLine {
         text: hint_text,
         size: hint_size,

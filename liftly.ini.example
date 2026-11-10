@@ -28,3 +28,7 @@ bubble_scale = 100
 
 # 气泡皮肤：green/blue/orange/dark
 bubble_theme = green
+
+# 界面语言：auto（跟随 Windows 显示语言）/ zh / en
+# 目前只影响桌面气泡和锁屏遮罩；托盘菜单、设置窗口等仍为中文
+language = auto

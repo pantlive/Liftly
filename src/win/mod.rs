@@ -96,6 +96,7 @@ pub fn run() {
         set_dpi_awareness();
 
         let cfg = load_config();
+        apply_ui_language(&cfg);
         let hinstance = GetModuleHandleW(std::ptr::null());
         // 图标必须活到窗口类注销之后，失败时由 None 提前结束启动。
         let Some(_main_icons) = register_main_class(hinstance) else {
@@ -219,6 +220,11 @@ fn ini_path() -> std::io::Result<std::path::PathBuf> {
         .parent()
         .ok_or_else(|| std::io::Error::other("无法确定程序目录"))?;
     Ok(dir.join("liftly.ini"))
+}
+
+fn apply_ui_language(cfg: &Config) {
+    let langid = unsafe { windows_sys::Win32::Globalization::GetUserDefaultUILanguage() };
+    crate::i18n::set_current(crate::i18n::resolve(cfg.language, langid));
 }
 
 fn load_config() -> Config {
@@ -348,6 +354,7 @@ impl App {
             return;
         };
         self.cfg = cfg;
+        apply_ui_language(&self.cfg);
         let now = now_ms();
         self.schedule.apply_config(&self.cfg, now);
         self.popup.hide();

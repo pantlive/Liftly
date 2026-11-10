@@ -1,6 +1,8 @@
 # Liftly
 站会儿
 
+[English](README.en.md) | 中文
+
 站会儿（Liftly）是一个 Windows 桌面常驻小工具：工作一段时间后自动锁住键盘和鼠标，用全屏深色遮罩盖住所有显示器；休息时间到后自动解锁。程序只有一个 `liftly.exe`，不联网，常驻系统托盘。
 
 ## 适用人群：腰疼患者福音
@@ -49,6 +51,7 @@
 | `bubble_position` | `auto` | `auto` 或 `x,y` | 气泡左上角坐标；`auto` 表示工作区右上角。拖动后自动保存，越界位置会夹回可见工作区 |
 | `bubble_scale` | `100` | `50..=300` | 气泡大小百分比；`100` 为标准大小。托盘菜单可切换 80/100/125/150/200 档位，也可拖动气泡边缘调整 |
 | `bubble_theme` | `green` | `green`/`blue`/`orange`/`dark` | 气泡皮肤；托盘菜单可切换清新绿、天空蓝、暖橙、深色，非法值忽略 |
+| `language` | `auto` | `auto`/`zh`/`en` | 界面语言。`auto` 跟随 Windows 显示语言（中文系统用中文，其他用英文）。目前只影响桌面气泡和锁屏遮罩；托盘菜单、设置窗口、提醒弹窗和错误对话框仍为中文。保存其他设置时不会自动追加这一行 |
 
 `liftly.ini` 使用简单的 `key = value` 格式，`#` 或 `;` 开头的行是注释。示例见同目录的 `liftly.ini.example`：
 
@@ -79,6 +82,9 @@ bubble_scale = 100
 
 # 气泡皮肤：green/blue/orange/dark
 bubble_theme = green
+
+# 界面语言：auto（跟随 Windows）/ zh / en；只影响气泡和锁屏
+language = auto
 ```
 
 ## 命令行参数
@@ -147,3 +153,4 @@ Windows 本机可直接 `cargo build --release`（产物 `target\release\liftly.
 - 如果两个钩子都安装失败，遮罩仍会显示，但输入不会被拦截；此时需等待休息结束。
 - 桌面倒计时气泡的卡片区域会接收鼠标：中间拖动移动位置，边缘拖动调整大小；点到卡片时不会穿透到下方窗口，圆角外的透明区域仍然穿透。位置保存在 `liftly.ini` 的 `bubble_position`，大小保存在 `bubble_scale`，皮肤保存在 `bubble_theme`，显示器拔插或分辨率变化后会自动夹回最近的工作区。
 - 不要同时运行多个副本；程序使用命名互斥量保证单实例，第二个实例只会提示“站会儿已经在运行”。
+- 托盘菜单、设置窗口、提醒弹窗和错误对话框目前仅为中文；桌面气泡和锁屏遮罩可通过 `language` 切换中英文。
