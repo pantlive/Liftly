@@ -5,6 +5,8 @@ mod autostart;
 #[cfg(any(windows, test))]
 mod config;
 #[cfg(any(windows, test))]
+mod i18n;
+#[cfg(any(windows, test))]
 mod schedule;
 #[cfg(any(windows, test))]
 mod view;

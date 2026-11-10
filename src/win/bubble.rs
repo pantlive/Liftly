@@ -228,7 +228,7 @@ unsafe fn create_bubble_window(saved: Option<(i32, i32)>) -> HWND {
 
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class = wide(BUBBLE_CLASS);
-    let title = wide("站会儿倒计时");
+    let title = wide(crate::i18n::bubble_window_title(crate::i18n::current()));
     CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_LAYERED,
         class.as_ptr(),
@@ -789,8 +789,9 @@ unsafe fn paint(hwnd: HWND) {
     let icon_left = width - pad - icon_size;
     let text_right = pad + view::bubble_text_width(width, dpi);
     let font_size = scaled(13);
+    let lang = crate::i18n::current();
     let clock = crate::view::format_clock(REMAINING_MS.load(Ordering::SeqCst));
-    let countdown = format!("距休息 {clock}");
+    let countdown = crate::i18n::bubble_countdown(lang, &clock);
     let countdown_rect = RECT {
         left: pad,
         top: scaled(4),
@@ -814,7 +815,7 @@ unsafe fn paint(hwnd: HWND) {
     };
     draw_text(
         memory_dc,
-        if paused { "已暂停" } else { "工作中" },
+        crate::i18n::bubble_status(lang, paused),
         &status_rect,
         font_size,
         FW_NORMAL as i32,

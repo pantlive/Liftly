@@ -2,6 +2,8 @@
 
 use std::ops::RangeInclusive;
 
+use crate::i18n::LanguagePref;
+
 /// 工作时长的合法范围（分钟）。
 pub const WORK_RANGE: RangeInclusive<u32> = 1..=600;
 /// 休息时长的合法范围（分钟）。
@@ -166,6 +168,7 @@ pub struct Config {
     pub bubble_position: BubblePosition,
     pub bubble_scale: u32,
     pub bubble_theme: BubbleTheme,
+    pub language: LanguagePref,
 }
 
 impl Default for Config {
@@ -180,6 +183,7 @@ impl Default for Config {
             bubble_position: BubblePosition::Auto,
             bubble_scale: 100,
             bubble_theme: BubbleTheme::Green,
+            language: LanguagePref::Auto,
         }
     }
 }
@@ -312,6 +316,11 @@ impl Config {
             "bubble_theme" => {
                 if let Some(v) = BubbleTheme::parse(value) {
                     self.bubble_theme = v;
+                }
+            }
+            "language" => {
+                if let Some(v) = LanguagePref::parse(value) {
+                    self.language = v;
                 }
             }
             _ => {}
@@ -455,6 +464,7 @@ impl Config {
             },
             "bubble_scale" => self.bubble_scale.to_string(),
             "bubble_theme" => self.bubble_theme.as_str().to_owned(),
+            "language" => self.language.as_str().to_owned(),
             _ => String::new(),
         }
     }
@@ -625,6 +635,7 @@ mod tests {
         assert_eq!(cfg.bubble_position, BubblePosition::Auto);
         assert_eq!(cfg.bubble_scale, 100);
         assert_eq!(cfg.bubble_theme, BubbleTheme::Green);
+        assert_eq!(cfg.language, LanguagePref::Auto);
     }
 
     #[test]
@@ -1021,6 +1032,7 @@ mod tests {
             bubble_position: BubblePosition::At(-500, 20),
             bubble_scale: 150,
             bubble_theme: BubbleTheme::Orange,
+            language: LanguagePref::Auto,
         };
         let text = cfg.to_ini_text("work_minutes = 10\nunknown = value # 注释\n");
         assert!(text.contains("bubble_position = -500,20"));
@@ -1088,5 +1100,44 @@ mod tests {
         assert_eq!(cfg.bubble_theme, BubbleTheme::Dark);
         assert_eq!(cfg.work_minutes, 37);
         assert_eq!(cfg.bubble_scale, 100);
+    }
+
+    #[test]
+    fn language_parses_case_insensitive_values_and_ignores_invalid() {
+        assert_eq!(Config::default().language, LanguagePref::Auto);
+        assert_eq!(
+            Config::parse_ini("language = EN\n").language,
+            LanguagePref::En
+        );
+        assert_eq!(
+            Config::parse_ini("language = zh\n").language,
+            LanguagePref::Zh
+        );
+        assert_eq!(
+            Config::parse_ini("language = Auto\n").language,
+            LanguagePref::Auto
+        );
+        for value in ["", "english", "cn", "jp", "1", "true", "zh-CN"] {
+            let cfg = Config::parse_ini(&format!("language = {value}\n"));
+            assert_eq!(cfg.language, LanguagePref::Auto, "value={value}");
+        }
+    }
+
+    #[test]
+    fn saving_other_settings_keeps_language_line_and_does_not_append_it() {
+        let original = "work_minutes = 37\nlanguage = en\n";
+        let patch = ConfigPatch {
+            work_minutes: Some(30),
+            ..ConfigPatch::default()
+        };
+        let saved = merge_into_ini(original, &patch).unwrap();
+        assert!(saved.contains("work_minutes = 30\n"));
+        assert!(saved.contains("language = en\n"));
+        assert_eq!(Config::parse_ini(&saved).language, LanguagePref::En);
+
+        let original = "work_minutes = 37\n";
+        let saved = merge_into_ini(original, &patch).unwrap();
+        assert!(!saved.to_ascii_lowercase().contains("language"));
+        assert_eq!(Config::parse_ini(&saved).language, LanguagePref::Auto);
     }
 }

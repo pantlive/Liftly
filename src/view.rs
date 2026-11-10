@@ -13,8 +13,8 @@ pub const BUBBLE_BASE_MARGIN: i32 = 16;
 pub const BUBBLE_PAD: i32 = 9;
 /// 右侧品牌图标边长（96 DPI）。
 pub const BUBBLE_ICON: i32 = 28;
-/// 文字区与图标之间的间距（96 DPI）。
-pub const BUBBLE_GAP: i32 = 7;
+/// 文字区与图标之间的间距（96 DPI）。略紧以便英文最长倒计时 “Break in 600:00” 也能放下。
+pub const BUBBLE_GAP: i32 = 4;
 
 /// 屏幕工作区，使用 Win32 的 `(left, top, right, bottom)` 约定，但不依赖 Windows 类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -734,8 +734,8 @@ mod tests {
         let (width, _) = bubble_size(96, 100);
         assert_eq!(width, 140);
         let text = bubble_text_width(width, 96);
-        // 「距休息 600:00」约 83px；96 DPI 标准宽度下文字区为 87px。
-        assert!(text >= 87, "text_width={text}");
+        // 「距休息 600:00」约 83px，「Break in 600:00」约 90px；96 DPI 标准宽度下文字区为 90px。
+        assert!(text >= 90, "text_width={text}");
     }
 
     #[test]
