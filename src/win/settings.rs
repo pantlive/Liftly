@@ -259,6 +259,7 @@ const fn language_from_index(index: isize) -> LanguagePref {
 /// 用小端字段构造标准 DLGTEMPLATE，每个控件起点按 DWORD 对齐。
 fn dialog_template(lang: Lang) -> Vec<u32> {
     let mut bytes = Vec::new();
+    let mut control_count = 0_u16;
     let style = WS_POPUP
         | WS_CAPTION
         | WS_SYSMENU
@@ -267,7 +268,8 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         | DS_CENTER as u32;
     bytes.extend_from_slice(&style.to_le_bytes());
     bytes.extend_from_slice(&0_u32.to_le_bytes());
-    words(&mut bytes, &[14, 0, 0, DIALOG_WIDTH, DIALOG_HEIGHT, 0, 0]);
+    // 控件数在模板末尾回填，避免新增控件后与实际数量脱节。
+    words(&mut bytes, &[0, 0, 0, DIALOG_WIDTH, DIALOG_HEIGHT, 0, 0]);
     string(&mut bytes, i18n::tr(lang, Msg::SettingsTitle));
     words(&mut bytes, &[9]);
     string(&mut bytes, "Microsoft YaHei UI");
@@ -282,6 +284,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         (66, Msg::SettingsWarnLabel, ID_WARN, Msg::SettingsWarnRange),
     ] {
         control(
+            &mut control_count,
             &mut bytes,
             0x82,
             i18n::tr(lang, label),
@@ -290,6 +293,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
             0,
         );
         control(
+            &mut control_count,
             &mut bytes,
             0x81,
             "",
@@ -298,6 +302,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
             WS_TABSTOP | WS_BORDER | ES_NUMBER as u32 | ES_AUTOHSCROLL as u32,
         );
         control(
+            &mut control_count,
             &mut bytes,
             0x82,
             i18n::tr(lang, range),
@@ -307,6 +312,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         );
     }
     control(
+        &mut control_count,
         &mut bytes,
         0x82,
         i18n::tr(lang, Msg::SettingsLanguage),
@@ -315,6 +321,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         0,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x85,
         "",
@@ -323,6 +330,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         WS_TABSTOP | CBS_DROPDOWNLIST as u32 | WS_VSCROLL,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x80,
         i18n::tr(lang, Msg::SettingsReset),
@@ -331,6 +339,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x80,
         i18n::tr(lang, Msg::SettingsEmergency),
@@ -339,6 +348,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x80,
         i18n::tr(lang, Msg::SettingsAutostart),
@@ -347,6 +357,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         WS_TABSTOP | BS_AUTOCHECKBOX as u32,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x80,
         i18n::tr(lang, Msg::SettingsSave),
@@ -355,6 +366,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
     );
     control(
+        &mut control_count,
         &mut bytes,
         0x80,
         i18n::tr(lang, Msg::SettingsCancel),
@@ -362,6 +374,7 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         [264, 162, 52, 20],
         WS_TABSTOP | BS_PUSHBUTTON as u32,
     );
+    bytes[8..10].copy_from_slice(&control_count.to_le_bytes());
     bytes.resize((bytes.len() + 3) & !3, 0);
     // Vec<u32> 保证传给 Win32 的模板本身也具有 DWORD 对齐。
     bytes
@@ -372,7 +385,16 @@ fn dialog_template(lang: Lang) -> Vec<u32> {
         .collect()
 }
 
-fn control(bytes: &mut Vec<u8>, class: u16, text: &str, id: u16, rect: [u16; 4], style: u32) {
+fn control(
+    count: &mut u16,
+    bytes: &mut Vec<u8>,
+    class: u16,
+    text: &str,
+    id: u16,
+    rect: [u16; 4],
+    style: u32,
+) {
+    *count += 1;
     bytes.resize((bytes.len() + 3) & !3, 0);
     bytes.extend_from_slice(&(WS_CHILD | WS_VISIBLE | style).to_le_bytes());
     bytes.extend_from_slice(&0_u32.to_le_bytes());
@@ -432,7 +454,7 @@ mod tests {
             let style = dword(&bytes, 0);
             assert_ne!(style & DS_SETFONT as u32, 0);
             assert_ne!(style & DS_MODALFRAME as u32, 0);
-            assert_eq!(word(&bytes, 8), 14);
+            assert_eq!(word(&bytes, 8), 16);
             assert_eq!(word(&bytes, 14), DIALOG_WIDTH, "{lang:?}");
             assert_eq!(word(&bytes, 16), DIALOG_HEIGHT, "{lang:?}");
             assert_eq!(word(&bytes, 18), 0);
@@ -444,6 +466,7 @@ mod tests {
             assert_eq!(text(&bytes, &mut cursor), "Microsoft YaHei UI");
             let mut tab_ids = Vec::new();
             let mut labels = Vec::new();
+            let mut ids = Vec::new();
             // 独立遍历模板，验证控件数、边界、预定义类及默认按钮。
             for _ in 0..word(&bytes, 8) {
                 cursor = (cursor + 3) & !3;
@@ -459,6 +482,7 @@ mod tests {
                     "{lang:?}"
                 );
                 let id = word(&bytes, cursor + 16) as i32;
+                ids.push(id);
                 if style & WS_TABSTOP != 0 {
                     tab_ids.push(id);
                 }
@@ -512,6 +536,25 @@ mod tests {
                 labels
                     .iter()
                     .any(|label| label == i18n::tr(lang, Msg::SettingsLanguage)),
+                "{lang:?}"
+            );
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label == i18n::tr(lang, Msg::SettingsSave)),
+                "{lang:?}"
+            );
+            assert!(
+                labels
+                    .iter()
+                    .any(|label| label == i18n::tr(lang, Msg::SettingsCancel)),
+                "{lang:?}"
+            );
+            assert_eq!(ids.len(), usize::from(word(&bytes, 8)), "{lang:?}");
+            assert_eq!(ids.iter().filter(|&&id| id == IDOK).count(), 1, "{lang:?}");
+            assert_eq!(
+                ids.iter().filter(|&&id| id == IDCANCEL).count(),
+                1,
                 "{lang:?}"
             );
             if lang == Lang::En {
