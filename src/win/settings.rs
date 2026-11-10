@@ -202,6 +202,7 @@ unsafe fn read_patch(hwnd: HWND, initial: &Config) -> Result<ConfigPatch, String
         show_bubble: None,
         bubble_position: None,
         bubble_scale: None,
+        bubble_theme: None,
     })
 }
 

@@ -15,7 +15,10 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{wide, AppIcon, WM_TRAY_CALLBACK};
-use crate::config::{Config, BREAK_PRESETS, BUBBLE_SCALE_PRESETS, WARN_PRESETS, WORK_PRESETS};
+use crate::config::{
+    BubbleTheme, Config, BREAK_PRESETS, BUBBLE_SCALE_PRESETS, BUBBLE_THEME_PRESETS, WARN_PRESETS,
+    WORK_PRESETS,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -24,6 +27,7 @@ pub enum MenuAction {
     Restart,
     ToggleBubble,
     SetBubbleScale(u32),
+    SetBubbleTheme(BubbleTheme),
     SetWork(u32),
     SetBreak(u32),
     SetWarn(u32),
@@ -38,6 +42,7 @@ const ID_SETTINGS: usize = 4;
 const ID_EXIT: usize = 5;
 const ID_TOGGLE_BUBBLE: usize = 6;
 const ID_BUBBLE_SCALE_BASE: usize = 400;
+const ID_BUBBLE_THEME_BASE: usize = 500;
 
 pub struct Tray {
     nid: NOTIFYICONDATAW,
@@ -188,6 +193,10 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             DestroyMenu(menu);
             return None;
         }
+        if !append_bubble_theme(menu, cfg.bubble_theme) {
+            DestroyMenu(menu);
+            return None;
+        }
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         // 子菜单挂到父菜单后由父菜单统一释放，失败时只销毁尚未挂接的句柄。
         for (label, presets, current, base, unit) in [
@@ -261,6 +270,13 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             {
                 Some(MenuAction::SetBubbleScale(
                     BUBBLE_SCALE_PRESETS[id - ID_BUBBLE_SCALE_BASE],
+                ))
+            }
+            id if (ID_BUBBLE_THEME_BASE..ID_BUBBLE_THEME_BASE + BUBBLE_THEME_PRESETS.len())
+                .contains(&id) =>
+            {
+                Some(MenuAction::SetBubbleTheme(
+                    BUBBLE_THEME_PRESETS[id - ID_BUBBLE_THEME_BASE],
                 ))
             }
             _ => None,
@@ -354,6 +370,34 @@ unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
         }
     }
     if AppendMenuW(parent, MF_POPUP, menu as usize, wide("气泡大小").as_ptr()) == 0 {
+        DestroyMenu(menu);
+        return false;
+    }
+    true
+}
+
+/// 气泡皮肤子菜单；当前项打勾。
+unsafe fn append_bubble_theme(parent: HMENU, current: BubbleTheme) -> bool {
+    let menu = CreatePopupMenu();
+    if menu.is_null() {
+        return false;
+    }
+    const LABELS: [&str; 4] = ["清新绿", "天空蓝", "暖橙", "深色"];
+    const _: () = assert!(BUBBLE_THEME_PRESETS.len() == LABELS.len());
+    for (index, value) in BUBBLE_THEME_PRESETS.iter().enumerate() {
+        let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
+        if AppendMenuW(
+            menu,
+            flags,
+            ID_BUBBLE_THEME_BASE + index,
+            wide(LABELS[index]).as_ptr(),
+        ) == 0
+        {
+            DestroyMenu(menu);
+            return false;
+        }
+    }
+    if AppendMenuW(parent, MF_POPUP, menu as usize, wide("气泡皮肤").as_ptr()) == 0 {
         DestroyMenu(menu);
         return false;
     }
