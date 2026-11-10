@@ -19,6 +19,7 @@ use crate::config::{
     BubbleTheme, Config, BREAK_PRESETS, BUBBLE_SCALE_PRESETS, BUBBLE_THEME_PRESETS, WARN_PRESETS,
     WORK_PRESETS,
 };
+use crate::i18n::{self, Lang, Msg};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -164,20 +165,21 @@ fn copy_wide(dst: &mut [u16], text: &str) {
 
 /// 在鼠标位置弹出右键菜单；菜单期间的输入由系统模态循环处理。
 pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
+    let lang = i18n::current();
     unsafe {
         let menu = CreatePopupMenu();
         if menu.is_null() {
             return None;
         }
 
-        let break_text = wide("立即休息");
+        let break_text = wide(i18n::tr(lang, Msg::TrayBreakNow));
         let pause_text = wide(if paused {
-            "继续计时"
+            i18n::tr(lang, Msg::TrayResume)
         } else {
-            "暂停计时"
+            i18n::tr(lang, Msg::TrayPause)
         });
-        let restart_text = wide("重新开始计时");
-        let exit_text = wide("退出");
+        let restart_text = wide(i18n::tr(lang, Msg::TrayRestart));
+        let exit_text = wide(i18n::tr(lang, Msg::TrayExit));
 
         AppendMenuW(menu, MF_STRING, ID_BREAK_NOW, break_text.as_ptr());
         AppendMenuW(menu, MF_STRING, ID_TOGGLE_PAUSE, pause_text.as_ptr());
@@ -187,47 +189,60 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
             menu,
             bubble_flags,
             ID_TOGGLE_BUBBLE,
-            wide("显示桌面倒计时").as_ptr(),
+            wide(i18n::tr(lang, Msg::TrayShowBubble)).as_ptr(),
         );
-        if !append_bubble_scale(menu, cfg.bubble_scale) {
+        if !append_bubble_scale(menu, lang, cfg.bubble_scale) {
             DestroyMenu(menu);
             return None;
         }
-        if !append_bubble_theme(menu, cfg.bubble_theme) {
+        if !append_bubble_theme(menu, lang, cfg.bubble_theme) {
             DestroyMenu(menu);
             return None;
         }
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         // 子菜单挂到父菜单后由父菜单统一释放，失败时只销毁尚未挂接的句柄。
-        for (label, presets, current, base, unit) in [
+        for (label, presets, current, base, seconds) in [
             (
-                "工作时长",
+                Msg::TrayWorkDuration,
                 WORK_PRESETS.as_slice(),
                 cfg.work_minutes,
                 100,
-                "分钟",
+                false,
             ),
             (
-                "休息时长",
+                Msg::TrayBreakDuration,
                 BREAK_PRESETS.as_slice(),
                 cfg.break_minutes,
                 200,
-                "分钟",
+                false,
             ),
             (
-                "锁定前提醒",
+                Msg::TrayWarnBeforeLock,
                 WARN_PRESETS.as_slice(),
                 cfg.warn_seconds,
                 300,
-                "秒",
+                true,
             ),
         ] {
-            if !append_presets(menu, label, presets, current, base, unit) {
+            if !append_presets(
+                menu,
+                lang,
+                i18n::tr(lang, label),
+                presets,
+                current,
+                base,
+                seconds,
+            ) {
                 DestroyMenu(menu);
                 return None;
             }
         }
-        AppendMenuW(menu, MF_STRING, ID_SETTINGS, wide("设置…").as_ptr());
+        AppendMenuW(
+            menu,
+            MF_STRING,
+            ID_SETTINGS,
+            wide(i18n::tr(lang, Msg::TraySettings)).as_ptr(),
+        );
         AppendMenuW(menu, MF_SEPARATOR, 0, null());
         AppendMenuW(menu, MF_STRING, ID_EXIT, exit_text.as_ptr());
 
@@ -287,11 +302,12 @@ pub fn show_menu(hwnd: HWND, paused: bool, cfg: &Config) -> Option<MenuAction> {
 /// 创建预设子菜单，自定义值显示在末项；父菜单持有成功挂接的子菜单。
 unsafe fn append_presets(
     parent: HMENU,
+    lang: Lang,
     label: &str,
     presets: &[u32],
     current: u32,
     base: usize,
-    unit: &str,
+    seconds: bool,
 ) -> bool {
     let menu = CreatePopupMenu();
     if menu.is_null() {
@@ -299,9 +315,9 @@ unsafe fn append_presets(
     }
     for (index, value) in presets.iter().enumerate() {
         let text = if *value == 0 {
-            "不提醒".to_owned()
+            i18n::tr(lang, Msg::TrayNoWarning).to_owned()
         } else {
-            format!("{value} {unit}")
+            i18n::duration_preset(lang, *value, seconds)
         };
         let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
         if AppendMenuW(menu, flags, base + index, wide(&text).as_ptr()) == 0 {
@@ -311,9 +327,9 @@ unsafe fn append_presets(
     }
     let custom = !presets.contains(&current);
     let text = if custom {
-        format!("自定义（{current} {unit}）")
+        i18n::duration_custom(lang, current, seconds)
     } else {
-        "自定义…".to_owned()
+        i18n::tr(lang, Msg::TrayCustom).to_owned()
     };
     if AppendMenuW(
         menu,
@@ -330,26 +346,20 @@ unsafe fn append_presets(
 }
 
 /// 气泡大小子菜单；非预设的自定义值单独置灰展示，避免误映射到设置窗口。
-unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
+unsafe fn append_bubble_scale(parent: HMENU, lang: Lang, current: u32) -> bool {
     let menu = CreatePopupMenu();
     if menu.is_null() {
         return false;
     }
-    const LABELS: [&str; 5] = [
-        "小（80%）",
-        "标准（100%）",
-        "大（125%）",
-        "较大（150%）",
-        "特大（200%）",
-    ];
-    const _: () = assert!(BUBBLE_SCALE_PRESETS.len() == LABELS.len());
+    let labels = i18n::bubble_scale_labels(lang);
+    const _: () = assert!(BUBBLE_SCALE_PRESETS.len() == 5);
     for (index, value) in BUBBLE_SCALE_PRESETS.iter().enumerate() {
         let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
         if AppendMenuW(
             menu,
             flags,
             ID_BUBBLE_SCALE_BASE + index,
-            wide(LABELS[index]).as_ptr(),
+            wide(labels[index]).as_ptr(),
         ) == 0
         {
             DestroyMenu(menu);
@@ -357,7 +367,7 @@ unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
         }
     }
     if !BUBBLE_SCALE_PRESETS.contains(&current) {
-        let text = format!("当前（{current}%，自定义）");
+        let text = i18n::bubble_scale_custom(lang, current);
         if AppendMenuW(
             menu,
             MF_STRING | MF_GRAYED | MF_CHECKED,
@@ -369,7 +379,13 @@ unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
             return false;
         }
     }
-    if AppendMenuW(parent, MF_POPUP, menu as usize, wide("气泡大小").as_ptr()) == 0 {
+    if AppendMenuW(
+        parent,
+        MF_POPUP,
+        menu as usize,
+        wide(i18n::tr(lang, Msg::TrayBubbleSize)).as_ptr(),
+    ) == 0
+    {
         DestroyMenu(menu);
         return false;
     }
@@ -377,27 +393,33 @@ unsafe fn append_bubble_scale(parent: HMENU, current: u32) -> bool {
 }
 
 /// 气泡皮肤子菜单；当前项打勾。
-unsafe fn append_bubble_theme(parent: HMENU, current: BubbleTheme) -> bool {
+unsafe fn append_bubble_theme(parent: HMENU, lang: Lang, current: BubbleTheme) -> bool {
     let menu = CreatePopupMenu();
     if menu.is_null() {
         return false;
     }
-    const LABELS: [&str; 4] = ["清新绿", "天空蓝", "暖橙", "深色"];
-    const _: () = assert!(BUBBLE_THEME_PRESETS.len() == LABELS.len());
+    let labels = i18n::bubble_theme_labels(lang);
+    const _: () = assert!(BUBBLE_THEME_PRESETS.len() == 4);
     for (index, value) in BUBBLE_THEME_PRESETS.iter().enumerate() {
         let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
         if AppendMenuW(
             menu,
             flags,
             ID_BUBBLE_THEME_BASE + index,
-            wide(LABELS[index]).as_ptr(),
+            wide(labels[index]).as_ptr(),
         ) == 0
         {
             DestroyMenu(menu);
             return false;
         }
     }
-    if AppendMenuW(parent, MF_POPUP, menu as usize, wide("气泡皮肤").as_ptr()) == 0 {
+    if AppendMenuW(
+        parent,
+        MF_POPUP,
+        menu as usize,
+        wide(i18n::tr(lang, Msg::TrayBubbleTheme)).as_ptr(),
+    ) == 0
+    {
         DestroyMenu(menu);
         return false;
     }

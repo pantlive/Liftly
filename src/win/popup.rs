@@ -24,6 +24,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::wide;
+use crate::i18n::{self, Msg};
 
 const POPUP_CLASS: &str = "Liftly.WarnPopup";
 const BASE_WIDTH: i32 = 360;
@@ -166,7 +167,7 @@ unsafe fn create_popup_window() -> HWND {
 
     let hinstance = GetModuleHandleW(std::ptr::null());
     let class = wide(POPUP_CLASS);
-    let title = wide("站会儿");
+    let title = wide(i18n::tr(i18n::current(), Msg::AppName));
     CreateWindowExW(
         WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         class.as_ptr(),
@@ -217,6 +218,7 @@ unsafe extern "system" fn popup_wnd_proc(
 }
 
 unsafe fn paint(hwnd: HWND) {
+    let lang = i18n::current();
     let mut paint_struct: PAINTSTRUCT = std::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut paint_struct);
     if hdc.is_null() {
@@ -267,7 +269,7 @@ unsafe fn paint(hwnd: HWND) {
     };
     draw_text(
         memory_dc,
-        "站会儿 · 即将休息",
+        i18n::tr(lang, Msg::PopupTitleLine),
         &first,
         small_size,
         FW_NORMAL as i32,
@@ -279,9 +281,9 @@ unsafe fn paint(hwnd: HWND) {
         .saturating_sub(GetTickCount64());
     let secs = remaining.div_ceil(1_000);
     let countdown_text = if secs == 0 {
-        "马上开始休息".to_owned()
+        i18n::tr(lang, Msg::PopupStartingNow).to_owned()
     } else {
-        format!("{} 秒后锁定，站起来活动一下", secs)
+        i18n::popup_countdown(lang, secs)
     };
     let second = RECT {
         left,
@@ -306,7 +308,7 @@ unsafe fn paint(hwnd: HWND) {
     };
     draw_text(
         memory_dc,
-        "请保存手头工作 · 点击关闭此提示",
+        i18n::tr(lang, Msg::PopupHint),
         &third,
         tiny_size,
         FW_NORMAL as i32,

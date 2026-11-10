@@ -16,11 +16,12 @@ People who sit for long stretches often forget to stand up, and their lower back
 - During a break it enumerates every monitor, creates a topmost full-screen overlay on each, and shows the reminder and remaining break time in the center. English copy is “Time to stand up and move!”, “Time left MM:SS”, and “Unlocks automatically when time is up” (plus the emergency-unlock chord when that option is on).
 - Low-level keyboard and mouse hooks block input during the break; time-up unlocks automatically.
 - The tray context menu has presets for work, break, and warning durations, plus bubble size (small / standard / large / larger / extra large) and bubble skin (fresh green / sky blue / warm orange / dark). “自定义…” or “设置…” lets you type any legal duration and toggle the unlock options; double-clicking the tray icon also opens Settings.
+- The entire UI is available in Chinese and English. Choose “English” under “Language” in Settings and save: the tray menu, tray tips and balloons, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay all switch immediately without resetting the timer. “System default” follows the Windows display language.
 - Timing pauses while the workstation is locked; unlocking or waking from sleep starts a fresh full work period.
 - Emergency unlock: during a break, hold Ctrl, Alt, and Shift (either side) and press F12 to end the break early (on by default, can be turned off).
 - Driven by a monotonic clock and a single `SetTimer`; no polling while idle.
 
-The tray menu, Settings window, reminder popup, and error dialogs are still Chinese. The desktop bubble and lock-screen overlay follow `language`.
+All UI copy follows `language` and can be changed in Settings; the desktop bubble and lock-screen overlay use the same setting.
 
 ## Screenshots
 
@@ -34,7 +35,7 @@ Full-screen overlay during a break (`docs/images/lock-screen.png`, one monitor):
 
 ## Running
 
-After you download or build it, put `liftly.exe` in any folder and double-click. There is no main window; it sits in the tray. Within about one second a “站会儿已启动” balloon shows the current work/break durations and says that right-clicking the tray icon opens settings and double-clicking opens the Settings window; the countdown bubble also appears in the top-right of the work area. If startup fails (for example the main window or tray icon cannot be created), a Chinese error dialog appears; the process does not exit silently. To quit, use “退出” on the tray context menu.
+After you download or build it, put `liftly.exe` in any folder and double-click. There is no main window; it sits in the tray. Within about one second a “站会儿已启动” balloon shows the current work/break durations and says that right-clicking the tray icon opens settings and double-clicking opens the Settings window; the countdown bubble also appears in the top-right of the work area. If startup fails (for example the main window or tray icon cannot be created), an error dialog appears; the process does not exit silently. To quit, use “退出” on the tray context menu.
 
 `liftly.ini` must sit in the same folder as `liftly.exe`. Missing files use the defaults; unknown keys and illegal values are ignored.
 
@@ -53,7 +54,7 @@ Changes from the tray take effect immediately and are saved to `liftly.ini`, kee
 | `bubble_position` | `auto` | `auto` or `x,y` | Top-left of the bubble; `auto` means top-right of the work area. Saved on drag; off-screen positions are clamped back into the visible work area |
 | `bubble_scale` | `100` | `50..=300` | Bubble size percent; `100` is the standard size. The tray menu can switch 80/100/125/150/200, or you can drag the bubble edge |
 | `bubble_theme` | `green` | `green`/`blue`/`orange`/`dark` | Bubble skin; the tray menu can switch fresh green, sky blue, warm orange, or dark. Illegal values are ignored |
-| `language` | `auto` | `auto`/`zh`/`en` | UI language. `auto` follows the Windows display language (Chinese on a Chinese UI, English otherwise). Currently this only affects the desktop bubble and lock-screen overlay; the tray menu, Settings window, reminder popup, and error dialogs stay Chinese. Saving other settings does not append this key |
+| `language` | `auto` | `auto`/`zh`/`en` | UI language. `auto` follows the Windows display language (Chinese on a Chinese UI, English otherwise). The tray menu, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay all follow this setting; change it under “Language” in Settings. Saving other settings does not append this key |
 
 `liftly.ini` uses a simple `key = value` format. Lines starting with `#` or `;` are comments. See `liftly.ini.example` in the same folder:
 
@@ -85,7 +86,7 @@ bubble_scale = 100
 # Bubble skin: green/blue/orange/dark
 bubble_theme = green
 
-# UI language: auto (follow Windows) / zh / en; only the bubble and lock screen
+# UI language: auto (follow Windows) / zh / en; applies to every UI surface and can be changed in Settings
 language = auto
 ```
 
@@ -155,4 +156,4 @@ Full environment setup is in [docs/BUILD.md](docs/BUILD.md).
 - If both hooks fail to install, the overlay still shows but input is not blocked; wait for the break to end.
 - The bubble card receives mouse input: drag the middle to move, drag an edge to resize. Clicks on the card do not pass through to windows below; the transparent area outside the rounded corners still does. Position is stored as `bubble_position` in `liftly.ini`, size as `bubble_scale`, skin as `bubble_theme`. After a monitor is unplugged or the resolution changes, the bubble is clamped back into the nearest work area.
 - Do not run more than one copy; a named mutex keeps a single instance, and a second instance only shows “站会儿已经在运行”.
-- The tray menu, Settings window, reminder popup, and error dialogs are still Chinese. The desktop bubble and lock-screen overlay can be switched between Chinese and English with `language`.
+- All UI copy (tray menu, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay) is available in Chinese and English. Change it under “Language” in Settings or with `language`.
