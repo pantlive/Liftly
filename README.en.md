@@ -29,9 +29,17 @@ Desktop countdown bubble while working (`docs/images/bubble.png`):
 
 ![Desktop countdown bubble](docs/images/bubble.png)
 
+Desktop countdown bubble with the English interface (`docs/images/bubble-en.png`):
+
+![Desktop countdown bubble (English)](docs/images/bubble-en.png)
+
 Full-screen overlay during a break (`docs/images/lock-screen.png`, one monitor):
 
 ![Lock-screen overlay](docs/images/lock-screen.png)
+
+Full-screen overlay with the English interface (`docs/images/lock-screen-en.png`, one monitor):
+
+![Lock-screen overlay (English)](docs/images/lock-screen-en.png)
 
 ## Running
 
