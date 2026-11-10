@@ -1,4 +1,4 @@
-//! 桌面倒计时气泡。双行圆角卡片，可拖动、拖边缩放、切换皮肤并按显示器工作区夹取。
+//! 桌面倒计时气泡。单行圆角卡片，可拖动、拖边缩放、切换皮肤并按显示器工作区夹取。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Once;
@@ -791,35 +791,27 @@ unsafe fn paint(hwnd: HWND) {
     let font_size = scaled(13);
     let lang = crate::i18n::current();
     let clock = crate::view::format_clock(REMAINING_MS.load(Ordering::SeqCst));
-    let countdown = crate::i18n::bubble_countdown(lang, &clock);
-    let countdown_rect = RECT {
+    let (text, color) = if paused {
+        (crate::i18n::bubble_paused(lang, &clock), palette.status)
+    } else {
+        (
+            crate::i18n::bubble_countdown(lang, &clock),
+            palette.countdown,
+        )
+    };
+    let text_rect = RECT {
         left: pad,
-        top: scaled(4),
+        top: scaled(2),
         right: text_right,
-        bottom: height / 2,
+        bottom: height - scaled(2),
     };
     draw_text(
         memory_dc,
-        &countdown,
-        &countdown_rect,
+        &text,
+        &text_rect,
         font_size,
         FW_NORMAL as i32,
-        rgb_tuple(palette.countdown),
-    );
-
-    let status_rect = RECT {
-        left: pad,
-        top: height / 2,
-        right: text_right,
-        bottom: height - scaled(4),
-    };
-    draw_text(
-        memory_dc,
-        crate::i18n::bubble_status(lang, paused),
-        &status_rect,
-        font_size,
-        FW_NORMAL as i32,
-        rgb_tuple(palette.status),
+        rgb_tuple(color),
     );
 
     // 复用嵌入的 Liftly 图标；AppIcon 在绘制结束时释放自有句柄，共享兜底图标不销毁。
