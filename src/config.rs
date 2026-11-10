@@ -2,7 +2,7 @@
 
 use std::ops::RangeInclusive;
 
-use crate::i18n::LanguagePref;
+use crate::i18n::{self, Lang, LanguagePref};
 
 /// 工作时长的合法范围（分钟）。
 pub const WORK_RANGE: RangeInclusive<u32> = 1..=600;
@@ -102,6 +102,7 @@ pub struct ConfigPatch {
     pub bubble_position: Option<BubblePosition>,
     pub bubble_scale: Option<u32>,
     pub bubble_theme: Option<BubbleTheme>,
+    pub language: Option<LanguagePref>,
 }
 
 impl ConfigPatch {
@@ -116,6 +117,7 @@ impl ConfigPatch {
             "bubble_position" => self.bubble_position.is_some(),
             "bubble_scale" => self.bubble_scale.is_some(),
             "bubble_theme" => self.bubble_theme.is_some(),
+            "language" => self.language.is_some(),
             _ => false,
         }
     }
@@ -123,7 +125,9 @@ impl ConfigPatch {
 
 /// 以磁盘配置为基准合并修改，保留原文件的注释及换行格式。
 pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, String> {
-    let cfg = Config::parse_ini(original).apply_patch(patch)?;
+    let cfg = Config::parse_ini(original)
+        .apply_patch(patch)
+        .map_err(|error| error.to_string())?;
     Ok(if original.trim_start_matches('\u{feff}').is_empty() {
         cfg.to_ini_text(original)
     } else {
@@ -132,7 +136,7 @@ pub fn merge_into_ini(original: &str, patch: &ConfigPatch) -> Result<String, Str
 }
 
 /// 写回 INI 时使用的已知键及其注释，顺序与配置文件一致。
-const INI_KEYS: [&str; 9] = [
+const INI_KEYS: [&str; 10] = [
     "work_minutes",
     "break_minutes",
     "warn_seconds",
@@ -142,9 +146,10 @@ const INI_KEYS: [&str; 9] = [
     "bubble_position",
     "bubble_scale",
     "bubble_theme",
+    "language",
 ];
 
-const INI_COMMENTS: [&str; 9] = [
+const INI_COMMENTS: [&str; 10] = [
     "# 工作时长（分钟），1-600",
     "# 休息时长（分钟），1-120",
     "# 锁定前提醒秒数，0-600；0 表示不提醒",
@@ -154,7 +159,40 @@ const INI_COMMENTS: [&str; 9] = [
     "# 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存",
     "# 气泡大小百分比，50-300；100 为标准大小",
     "# 气泡皮肤：green/blue/orange/dark",
+    "# 界面语言：auto/zh/en",
 ];
+
+/// 配置校验错误；`Display` 固定输出中文，界面按当前语言调用 [`ConfigError::message`]。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigError {
+    Work,
+    Break,
+    Warn,
+    BubbleScale,
+}
+
+impl ConfigError {
+    pub fn message(self, lang: Lang) -> String {
+        match self {
+            Self::Work => i18n::work_range_error(lang, *WORK_RANGE.start(), *WORK_RANGE.end()),
+            Self::Break => i18n::break_range_error(lang, *BREAK_RANGE.start(), *BREAK_RANGE.end()),
+            Self::Warn => i18n::warn_range_error(lang, WARN_MAX),
+            Self::BubbleScale => i18n::bubble_scale_range_error(
+                lang,
+                *BUBBLE_SCALE_RANGE.start(),
+                *BUBBLE_SCALE_RANGE.end(),
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message(Lang::Zh))
+    }
+}
+
+impl std::error::Error for ConfigError {}
 
 /// 运行时配置。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,7 +228,7 @@ impl Default for Config {
 
 impl Config {
     /// 校验并应用部分修改；未修改的字段沿用当前配置。
-    pub fn apply_patch(&self, patch: &ConfigPatch) -> Result<Self, String> {
+    pub fn apply_patch(&self, patch: &ConfigPatch) -> Result<Self, ConfigError> {
         let mut cfg = self.with_times(
             patch.work_minutes.unwrap_or(self.work_minutes),
             patch.break_minutes.unwrap_or(self.break_minutes),
@@ -202,15 +240,12 @@ impl Config {
         cfg.bubble_position = patch.bubble_position.unwrap_or(self.bubble_position);
         if let Some(scale) = patch.bubble_scale {
             if !BUBBLE_SCALE_RANGE.contains(&scale) {
-                return Err(format!(
-                    "气泡大小必须在 {}% 到 {}% 之间",
-                    BUBBLE_SCALE_RANGE.start(),
-                    BUBBLE_SCALE_RANGE.end()
-                ));
+                return Err(ConfigError::BubbleScale);
             }
             cfg.bubble_scale = scale;
         }
         cfg.bubble_theme = patch.bubble_theme.unwrap_or(self.bubble_theme);
+        cfg.language = patch.language.unwrap_or(self.language);
         Ok(cfg)
     }
 
@@ -333,23 +368,15 @@ impl Config {
         work_minutes: u32,
         break_minutes: u32,
         warn_seconds: u32,
-    ) -> Result<Config, String> {
+    ) -> Result<Config, ConfigError> {
         if !WORK_RANGE.contains(&work_minutes) {
-            return Err(format!(
-                "工作时长必须在 {} 到 {} 分钟之间",
-                WORK_RANGE.start(),
-                WORK_RANGE.end()
-            ));
+            return Err(ConfigError::Work);
         }
         if !BREAK_RANGE.contains(&break_minutes) {
-            return Err(format!(
-                "休息时长必须在 {} 到 {} 分钟之间",
-                BREAK_RANGE.start(),
-                BREAK_RANGE.end()
-            ));
+            return Err(ConfigError::Break);
         }
         if warn_seconds > WARN_MAX {
-            return Err(format!("提醒秒数必须在 0 到 {} 秒之间", WARN_MAX));
+            return Err(ConfigError::Warn);
         }
 
         let mut cfg = self.clone();
@@ -431,6 +458,10 @@ impl Config {
         let mut appended = false;
         for (index, key) in INI_KEYS.iter().enumerate() {
             if present[index] {
+                continue;
+            }
+            // language 只有用户明确修改时才补写，避免保存其他设置时打扰手改的配置。
+            if *key == "language" && patch.is_some_and(|patch| patch.language.is_none()) {
                 continue;
             }
             appended = true;
@@ -915,7 +946,8 @@ mod tests {
         assert!(cfg.with_times(45, 5, 0).is_ok());
 
         let err = cfg.with_times(0, 5, 60).unwrap_err();
-        assert!(err.contains("工作时长"));
+        assert_eq!(err, ConfigError::Work);
+        assert!(err.to_string().contains("工作时长"));
     }
 
     #[test]
@@ -1139,5 +1171,68 @@ mod tests {
         let saved = merge_into_ini(original, &patch).unwrap();
         assert!(!saved.to_ascii_lowercase().contains("language"));
         assert_eq!(Config::parse_ini(&saved).language, LanguagePref::Auto);
+    }
+
+    #[test]
+    fn saving_language_only_rewrites_or_appends_language() {
+        let patch = ConfigPatch {
+            language: Some(LanguagePref::En),
+            ..ConfigPatch::default()
+        };
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = auto\nbubble_scale = 100\nbubble_theme = green\nlanguage = auto\n";
+        let saved = merge_into_ini(original, &patch).unwrap();
+        assert_eq!(saved, original.replace("language = auto", "language = en"));
+        let parsed = Config::parse_ini(&saved);
+        assert_eq!(parsed.language, LanguagePref::En);
+        assert_eq!(parsed.work_minutes, 37);
+
+        let original = "work_minutes = 37\n";
+        let saved = merge_into_ini(original, &patch).unwrap();
+        assert!(saved.starts_with("work_minutes = 37\n"));
+        assert!(saved.contains("# 界面语言：auto/zh/en\nlanguage = en\n"));
+        assert!(saved.ends_with("language = en\n"));
+        assert_eq!(Config::parse_ini(&saved).language, LanguagePref::En);
+        assert_eq!(Config::parse_ini(&saved).work_minutes, 37);
+
+        let created = merge_into_ini("", &patch).unwrap();
+        assert!(created.contains("# 界面语言：auto/zh/en\nlanguage = en\n"));
+        assert_eq!(Config::parse_ini(&created).language, LanguagePref::En);
+    }
+
+    #[test]
+    fn config_errors_are_localized() {
+        for (error, chinese, english) in [
+            (
+                Config::default().with_times(0, 5, 60).unwrap_err(),
+                "工作时长必须在 1 到 600 分钟之间",
+                "Work duration must be between 1 and 600 minutes",
+            ),
+            (
+                Config::default().with_times(45, 0, 60).unwrap_err(),
+                "休息时长必须在 1 到 120 分钟之间",
+                "Break duration must be between 1 and 120 minutes",
+            ),
+            (
+                Config::default().with_times(45, 5, 601).unwrap_err(),
+                "提醒秒数必须在 0 到 600 秒之间",
+                "Warn seconds must be between 0 and 600",
+            ),
+        ] {
+            assert_eq!(error.to_string(), chinese);
+            assert_eq!(error.message(Lang::En), english);
+        }
+
+        let error = Config::default()
+            .apply_patch(&ConfigPatch {
+                bubble_scale: Some(49),
+                ..ConfigPatch::default()
+            })
+            .unwrap_err();
+        assert_eq!(error, ConfigError::BubbleScale);
+        assert_eq!(error.to_string(), "气泡大小必须在 50% 到 300% 之间");
+        assert_eq!(
+            error.message(Lang::En),
+            "Bubble size must be between 50% and 300%"
+        );
     }
 }

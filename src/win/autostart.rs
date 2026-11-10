@@ -10,6 +10,7 @@ use windows_sys::Win32::System::Registry::{
 
 use super::wide;
 use crate::autostart::{command_targets, run_command, VALUE_NAME};
+use crate::i18n;
 
 const RUN_SUBKEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 
@@ -90,7 +91,8 @@ fn read_run_command() -> Option<String> {
 }
 
 fn write_run_command() -> Result<(), String> {
-    let exe = current_exe_string().ok_or_else(|| "无法读取程序路径".to_owned())?;
+    let lang = i18n::current();
+    let exe = current_exe_string().ok_or_else(|| i18n::autostart_path_error(lang).to_owned())?;
     let command = wide(&run_command(&exe));
     let name = wide(VALUE_NAME);
     let key = create_run_key()?;
@@ -108,22 +110,23 @@ fn write_run_command() -> Result<(), String> {
     if status == ERROR_SUCCESS {
         Ok(())
     } else {
-        Err(format!("无法写入开机自启动（错误码 {status}）"))
+        Err(i18n::autostart_write_error(lang, status))
     }
 }
 
 fn delete_run_command() -> Result<(), String> {
+    let lang = i18n::current();
     let key = match open_run_key() {
         Ok(key) => key,
         Err(ERROR_FILE_NOT_FOUND) => return Ok(()),
-        Err(status) => return Err(format!("无法打开注册表项（错误码 {status}）")),
+        Err(status) => return Err(i18n::autostart_open_key_error(lang, status)),
     };
     let name = wide(VALUE_NAME);
     let status = unsafe { RegDeleteValueW(key.0, name.as_ptr()) };
     if status == ERROR_SUCCESS || status == ERROR_FILE_NOT_FOUND {
         Ok(())
     } else {
-        Err(format!("无法删除开机自启动（错误码 {status}）"))
+        Err(i18n::autostart_delete_error(lang, status))
     }
 }
 
@@ -146,7 +149,7 @@ fn create_run_key() -> Result<RegKey, String> {
     if status == ERROR_SUCCESS && !handle.is_null() {
         Ok(RegKey(handle))
     } else {
-        Err(format!("无法创建注册表项（错误码 {status}）"))
+        Err(i18n::autostart_create_key_error(i18n::current(), status))
     }
 }
 

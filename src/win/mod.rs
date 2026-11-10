@@ -27,6 +27,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::config::{
     merge_into_ini, BubblePosition, BubbleTheme, Config, ConfigPatch, BUBBLE_SCALE_RANGE,
 };
+use crate::i18n::{self, Lang, Msg};
 use crate::schedule::{Event, Phase, Schedule};
 use crate::view;
 
@@ -53,22 +54,20 @@ pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-fn message_box(text: &str, flags: u32) {
+fn message_box(lang: Lang, text: &str, flags: u32) {
     unsafe {
-        let title = wide("站会儿");
+        let title = wide(i18n::tr(lang, Msg::AppName));
         let text = wide(text);
         MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), flags);
     }
 }
 
-/// GUI 子系统没有控制台；panic 时至少给用户一个可见的中文提示。
+/// GUI 子系统没有控制台；panic 时至少给用户一个可见的本地化提示。
 fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        message_box(
-            "程序内部错误，即将退出。请重新启动站会儿；若问题持续出现，请查看 README 的常见问题。",
-            MB_OK | MB_ICONERROR,
-        );
+        let lang = i18n::current();
+        message_box(lang, i18n::tr(lang, Msg::Panic), MB_OK | MB_ICONERROR);
         previous(info);
     }));
 }
@@ -77,17 +76,19 @@ fn install_panic_hook() {
 pub fn run() {
     install_panic_hook();
 
+    // 先读取配置并确定界面语言，连“已在运行”的提示也要使用正确的语言。
+    let cfg = load_config();
+    apply_ui_language(&cfg);
+    let lang = i18n::current();
+
     unsafe {
         if is_second_instance() {
             if crate::autostart::is_autostart_launch(std::env::args().skip(1)) {
                 return;
             }
-            let text = wide("站会儿已经在运行");
-            let title = wide("站会儿");
-            MessageBoxW(
-                std::ptr::null_mut(),
-                text.as_ptr(),
-                title.as_ptr(),
+            message_box(
+                lang,
+                i18n::tr(lang, Msg::AlreadyRunning),
                 MB_OK | MB_ICONINFORMATION,
             );
             return;
@@ -95,16 +96,14 @@ pub fn run() {
 
         set_dpi_awareness();
 
-        let cfg = load_config();
-        apply_ui_language(&cfg);
         let hinstance = GetModuleHandleW(std::ptr::null());
         // 图标必须活到窗口类注销之后，失败时由 None 提前结束启动。
-        let Some(_main_icons) = register_main_class(hinstance) else {
+        let Some(_main_icons) = register_main_class(hinstance, lang) else {
             return;
         };
 
         let class = wide(WINDOW_CLASS);
-        let title = wide("站会儿");
+        let title = wide(i18n::tr(lang, Msg::AppName));
         let hwnd = CreateWindowExW(
             0,
             class.as_ptr(),
@@ -122,7 +121,8 @@ pub fn run() {
         if hwnd.is_null() {
             let code = GetLastError();
             message_box(
-                &format!("创建主窗口失败（错误码 {code}），程序无法启动。"),
+                lang,
+                &i18n::create_main_window_failed(lang, code),
                 MB_OK | MB_ICONERROR,
             );
             UnregisterClassW(class.as_ptr(), hinstance);
@@ -138,7 +138,7 @@ pub fn run() {
             hwnd,
             cfg,
             schedule,
-            tray: tray::Tray::new(hwnd, "站会儿"),
+            tray: tray::Tray::new(hwnd, i18n::tr(lang, Msg::AppName)),
             overlay: overlay::Overlay::new(),
             popup: popup::Popup::new(),
             bubble: bubble::Bubble::new(hwnd),
@@ -288,6 +288,7 @@ impl Drop for AppIcon {
 /// 注册成功时返回持有图标的数组；失败时显示错误码并返回 None。
 unsafe fn register_main_class(
     hinstance: windows_sys::Win32::Foundation::HINSTANCE,
+    lang: Lang,
 ) -> Option<[AppIcon; 2]> {
     let class = wide(WINDOW_CLASS);
     // 分别按系统尺寸加载大小图标，避免共享缓存返回错误尺寸。
@@ -312,7 +313,8 @@ unsafe fn register_main_class(
     if RegisterClassExW(&wc) == 0 {
         let code = GetLastError();
         message_box(
-            &format!("注册主窗口类失败（错误码 {code}），程序无法启动。"),
+            lang,
+            &i18n::register_class_failed(lang, code),
             MB_OK | MB_ICONERROR,
         );
         return None;
@@ -356,8 +358,13 @@ impl App {
         self.cfg = cfg;
         apply_ui_language(&self.cfg);
         let now = now_ms();
-        self.schedule.apply_config(&self.cfg, now);
-        self.popup.hide();
+        // 只改语言时无需重启工作周期，也不应关闭正在显示的提醒弹窗。
+        let mut timing_patch = patch.clone();
+        timing_patch.language = None;
+        if timing_patch != ConfigPatch::default() {
+            self.schedule.apply_config(&self.cfg, now);
+            self.popup.hide();
+        }
         self.sync_bubble(now);
         self.update_tip(now);
         self.arm_timer(now);
@@ -377,8 +384,11 @@ impl App {
             std::fs::write(path, text).map_err(|error| error.to_string())
         })();
         if saved.is_err() {
-            self.tray
-                .balloon("站会儿", "已生效，但没能保存到 liftly.ini");
+            let lang = i18n::current();
+            self.tray.balloon(
+                i18n::tr(lang, Msg::AppName),
+                i18n::tr(lang, Msg::SaveFailed),
+            );
         }
     }
 
@@ -430,17 +440,18 @@ impl App {
     }
 
     fn update_tip(&mut self, now: u64) {
+        let lang = i18n::current();
         let tip = match self.schedule.phase() {
             Phase::Working if self.schedule.warning_active(now) => {
                 let secs = self.schedule.remaining_ms(now).div_ceil(1_000);
-                format!("站会儿：{} 秒后休息", secs)
+                i18n::tray_tip_warning(lang, secs)
             }
             Phase::Working => {
                 let minutes = self.schedule.remaining_ms(now).saturating_add(59_999) / 60_000;
-                format!("站会儿：距离休息还有 {} 分钟", minutes.max(1))
+                i18n::tray_tip_work(lang, minutes.max(1))
             }
-            Phase::Paused => "站会儿：已暂停".to_owned(),
-            Phase::Breaking => "站会儿：休息中".to_owned(),
+            Phase::Paused => i18n::tr(lang, Msg::TipPaused).to_owned(),
+            Phase::Breaking => i18n::tr(lang, Msg::TipBreaking).to_owned(),
         };
         self.tray.update_tip(&tip);
     }
@@ -507,8 +518,10 @@ impl App {
                     unsafe {
                         KillTimer(self.hwnd, STARTUP_TIMER_ID);
                     }
+                    let lang = i18n::current();
                     message_box(
-                        "无法创建托盘图标，程序不能继续运行。\n请确认任务栏通知区域可用后重新启动站会儿。",
+                        lang,
+                        i18n::tr(lang, Msg::TrayCreateFailed),
                         MB_OK | MB_ICONERROR,
                     );
                     return false;
@@ -523,13 +536,12 @@ impl App {
         unsafe {
             KillTimer(self.hwnd, STARTUP_TIMER_ID);
         }
-        let text = format!(
-            "已开始计时：工作 {} 分钟，休息 {} 分钟。\n右键托盘图标可设置，双击打开设置。",
-            self.cfg.work_minutes, self.cfg.break_minutes
-        );
-        if !self.tray.balloon("站会儿已启动", &text) {
+        let lang = i18n::current();
+        let text = i18n::startup_balloon(lang, self.cfg.work_minutes, self.cfg.break_minutes);
+        if !self.tray.balloon(i18n::tr(lang, Msg::StartupTitle), &text) {
             message_box(
-                "启动提示气泡显示失败，但程序已经在托盘中运行。\n请检查任务栏通知区域设置。",
+                lang,
+                i18n::tr(lang, Msg::StartupBalloonFailed),
                 MB_OK | MB_ICONWARNING,
             );
         }
@@ -538,6 +550,7 @@ impl App {
 
     fn on_timer(&mut self) {
         let now = now_ms();
+        let lang = i18n::current();
         let events = self.schedule.tick(now);
 
         for event in events {
@@ -545,9 +558,8 @@ impl App {
                 Event::Warn { secs_left } => {
                     if !self.popup.show(self.schedule.deadline_ms()) {
                         // 弹窗创建失败时保留原来的托盘气泡提醒。
-                        let text =
-                            format!("还有 {} 秒就要站起来活动啦，请保存手头工作。", secs_left);
-                        self.tray.balloon("站会儿", &text);
+                        let text = i18n::warn_balloon(lang, secs_left);
+                        self.tray.balloon(i18n::tr(lang, Msg::AppName), &text);
                     }
                 }
                 Event::StartBreak => {
@@ -562,7 +574,8 @@ impl App {
                 }
                 Event::EndBreak => {
                     self.stop_break_resources();
-                    self.tray.balloon("站会儿", "休息结束，继续加油！");
+                    self.tray
+                        .balloon(i18n::tr(lang, Msg::AppName), i18n::tr(lang, Msg::BreakOver));
                 }
             }
         }
@@ -643,7 +656,9 @@ impl App {
         let now = now_ms();
         self.schedule.end_break_now(now);
         self.stop_break_resources();
-        self.tray.balloon("站会儿", "休息结束，继续加油！");
+        let lang = i18n::current();
+        self.tray
+            .balloon(i18n::tr(lang, Msg::AppName), i18n::tr(lang, Msg::BreakOver));
         self.update_tip(now);
         self.sync_bubble(now);
         self.arm_timer(now);
