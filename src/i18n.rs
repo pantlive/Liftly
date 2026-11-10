@@ -78,12 +78,10 @@ pub fn bubble_countdown(lang: Lang, clock: &str) -> String {
     }
 }
 
-pub fn bubble_status(lang: Lang, paused: bool) -> &'static str {
-    match (lang, paused) {
-        (Lang::Zh, true) => "已暂停",
-        (Lang::Zh, false) => "工作中",
-        (Lang::En, true) => "Paused",
-        (Lang::En, false) => "Working",
+pub fn bubble_paused(lang: Lang, clock: &str) -> String {
+    match lang {
+        Lang::Zh => format!("已暂停 {clock}"),
+        Lang::En => format!("Paused {clock}"),
     }
 }
 
@@ -164,10 +162,8 @@ mod tests {
     fn copy_matches_chinese_original_and_english_translations() {
         assert_eq!(bubble_countdown(Lang::Zh, "45:00"), "距休息 45:00");
         assert_eq!(bubble_countdown(Lang::En, "45:00"), "Break in 45:00");
-        assert_eq!(bubble_status(Lang::Zh, false), "工作中");
-        assert_eq!(bubble_status(Lang::Zh, true), "已暂停");
-        assert_eq!(bubble_status(Lang::En, false), "Working");
-        assert_eq!(bubble_status(Lang::En, true), "Paused");
+        assert_eq!(bubble_paused(Lang::Zh, "45:00"), "已暂停 45:00");
+        assert_eq!(bubble_paused(Lang::En, "45:00"), "Paused 45:00");
         assert_eq!(overlay_title(Lang::Zh), "站起来，活动一下！");
         assert_eq!(overlay_title(Lang::En), "Time to stand up and move!");
         assert_eq!(overlay_countdown(Lang::Zh, 999), "剩余 00:01");
@@ -203,20 +199,21 @@ mod tests {
     fn english_longest_countdown_fits_compact_bubble_text_width() {
         let zh = bubble_countdown(Lang::Zh, "600:00");
         let en = bubble_countdown(Lang::En, "600:00");
+        let zh_paused = bubble_paused(Lang::Zh, "600:00");
+        let en_paused = bubble_paused(Lang::En, "600:00");
         assert_eq!(zh, "距休息 600:00");
         assert_eq!(en, "Break in 600:00");
-        let available = bubble_text_width(140, 96);
+        assert_eq!(zh_paused, "已暂停 600:00");
+        assert_eq!(en_paused, "Paused 600:00");
+        let available = bubble_text_width(134, 96);
         assert_eq!(available, 90);
-        assert!(
-            estimated_px(&zh) <= available,
-            "zh {}px > {available}px",
-            estimated_px(&zh)
-        );
-        assert!(
-            estimated_px(&en) <= available,
-            "en {}px > {available}px",
-            estimated_px(&en)
-        );
+        for text in [&zh, &en, &zh_paused, &en_paused] {
+            assert!(
+                estimated_px(text) <= available,
+                "{text} {}px > {available}px",
+                estimated_px(text)
+            );
+        }
     }
 
     #[test]

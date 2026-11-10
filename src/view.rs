@@ -3,16 +3,16 @@
 use crate::config::{BubbleTheme, BUBBLE_SCALE_RANGE};
 use crate::schedule::Phase;
 
-/// 倒计时气泡在 96 DPI 下的基准宽度。压缩中间空白后仍能完整显示「距休息 600:00」。
-pub const BUBBLE_BASE_WIDTH: i32 = 140;
-/// 倒计时气泡在 96 DPI 下的基准高度。
-pub const BUBBLE_BASE_HEIGHT: i32 = 42;
+/// 倒计时气泡在 96 DPI 下的基准宽度。单行布局下文字区为 134−9−22−4−9＝90，仍能完整显示最长倒计时。
+pub const BUBBLE_BASE_WIDTH: i32 = 134;
+/// 倒计时气泡在 96 DPI 下的基准高度。单行倒计时。
+pub const BUBBLE_BASE_HEIGHT: i32 = 32;
 /// 气泡默认距工作区边缘的间距（96 DPI）。
 pub const BUBBLE_BASE_MARGIN: i32 = 16;
 /// 气泡左右内边距（96 DPI）。
 pub const BUBBLE_PAD: i32 = 9;
-/// 右侧品牌图标边长（96 DPI）。
-pub const BUBBLE_ICON: i32 = 28;
+/// 右侧品牌图标边长（96 DPI）。随单行高度缩小。
+pub const BUBBLE_ICON: i32 = 22;
 /// 文字区与图标之间的间距（96 DPI）。略紧以便英文最长倒计时 “Break in 600:00” 也能放下。
 pub const BUBBLE_GAP: i32 = 4;
 
@@ -102,6 +102,7 @@ pub struct BubblePalette {
     pub background: (u8, u8, u8),
     pub border: (u8, u8, u8),
     pub countdown: (u8, u8, u8),
+    /// 暂停时的文字颜色。
     pub status: (u8, u8, u8),
 }
 
@@ -389,11 +390,11 @@ mod tests {
     #[test]
     fn bubble_size_and_margin_scale_by_dpi() {
         for (dpi, size, margin) in [
-            (0, (140, 42), 16),
-            (96, (140, 42), 16),
-            (120, (175, 53), 20),
-            (144, (210, 63), 24),
-            (192, (280, 84), 32),
+            (0, (134, 32), 16),
+            (96, (134, 32), 16),
+            (120, (168, 40), 20),
+            (144, (201, 48), 24),
+            (192, (268, 64), 32),
         ] {
             assert_eq!(bubble_size(dpi, 100), size, "dpi={dpi}");
             assert_eq!(bubble_margin(dpi), margin, "dpi={dpi}");
@@ -408,15 +409,15 @@ mod tests {
         assert_eq!(
             rect,
             BubbleRect {
-                x: 1764,
+                x: 1770,
                 y: 16,
-                width: 140,
-                height: 42,
+                width: 134,
+                height: 32,
             }
         );
         // 高 DPI 下按缩放后的尺寸和边距重新计算。
         let rect = bubble_rect(144, 100, work(0, 0, 1920, 1040), None);
-        assert_eq!(rect.x, 1920 - 210 - 24);
+        assert_eq!(rect.x, 1920 - 201 - 24);
         assert_eq!(rect.y, 24);
     }
 
@@ -432,10 +433,10 @@ mod tests {
         assert_eq!(
             bubble_rect(96, 100, area, Some((5000, 5000))),
             BubbleRect {
-                x: 1780,
-                y: 998,
-                width: 140,
-                height: 42,
+                x: 1786,
+                y: 1008,
+                width: 134,
+                height: 32,
             }
         );
         assert_eq!(
@@ -452,7 +453,7 @@ mod tests {
         let area = work(-1920, 0, 0, 1040);
         // 副屏在主屏左侧时，默认位置和副屏上的坐标都保持负数。
         let default = bubble_rect(96, 100, area, None);
-        assert_eq!((default.x, default.y), (-156, 16));
+        assert_eq!((default.x, default.y), (-150, 16));
         let saved = bubble_rect(96, 100, area, Some((-1000, 100)));
         assert_eq!((saved.x, saved.y), (-1000, 100));
         let offscreen = bubble_rect(96, 100, area, Some((-3000, -100)));
@@ -462,8 +463,8 @@ mod tests {
     #[test]
     fn tiny_work_area_keeps_origin_and_size() {
         let rect = bubble_rect(96, 100, work(0, 0, 100, 40), None);
-        assert_eq!((rect.x, rect.y), (0, 0));
-        assert_eq!((rect.width, rect.height), (140, 42));
+        assert_eq!((rect.x, rect.y), (0, 8));
+        assert_eq!((rect.width, rect.height), (134, 32));
         let rect = bubble_rect(96, 100, work(100, 100, 100, 100), Some((120, 130)));
         assert_eq!((rect.x, rect.y), (100, 100));
     }
@@ -473,12 +474,12 @@ mod tests {
         let area = work(-1920, -1440, 640, 0);
         let saved = bubble_rect(192, 100, area, Some((-800, -900)));
         assert_eq!((saved.x, saved.y), (-800, -900));
-        assert_eq!((saved.width, saved.height), (280, 84));
+        assert_eq!((saved.width, saved.height), (268, 64));
         // 上方副屏边缘的坐标按缩放后的尺寸夹取，不能裁掉卡片。
         let edge = bubble_rect(192, 100, area, Some((600, -10)));
-        assert_eq!((edge.x, edge.y), (360, -84));
+        assert_eq!((edge.x, edge.y), (372, -64));
         let default = bubble_rect(192, 100, area, None);
-        assert_eq!((default.x, default.y), (328, -1408));
+        assert_eq!((default.x, default.y), (340, -1408));
     }
 
     #[test]
@@ -506,7 +507,7 @@ mod tests {
 
     #[test]
     fn bubble_scale_100_matches_base_size() {
-        assert_eq!(bubble_size(96, 100), (140, 42));
+        assert_eq!(bubble_size(96, 100), (134, 32));
         assert_eq!(bubble_size(0, 100), bubble_size(96, 100));
         assert_eq!(bubble_dpi(0, 100), 96);
         assert_eq!(bubble_dpi(96, 100), 96);
@@ -514,8 +515,8 @@ mod tests {
 
     #[test]
     fn bubble_scale_resizes_at_96_dpi() {
-        assert_eq!(bubble_size(96, 150), (210, 63));
-        assert_eq!(bubble_size(96, 50), (70, 21));
+        assert_eq!(bubble_size(96, 150), (201, 48));
+        assert_eq!(bubble_size(96, 50), (67, 16));
     }
 
     #[test]
@@ -533,10 +534,10 @@ mod tests {
         assert_eq!(
             rect,
             BubbleRect {
-                x: 1920 - 210 - 16,
+                x: 1920 - 201 - 16,
                 y: 16,
-                width: 210,
-                height: 63,
+                width: 201,
+                height: 48,
             }
         );
         assert!(rect.x >= area.left && rect.x + rect.width <= area.right);
@@ -560,8 +561,8 @@ mod tests {
             }
         }
         let saved = bubble_rect(96, 200, work(0, 0, 1920, 1040), Some((1800, 10)));
-        assert_eq!((saved.width, saved.height), (280, 84));
-        assert_eq!((saved.x, saved.y), (1640, 10));
+        assert_eq!((saved.width, saved.height), (268, 64));
+        assert_eq!((saved.x, saved.y), (1652, 10));
     }
 
     #[test]
@@ -732,7 +733,7 @@ mod tests {
     #[test]
     fn bubble_text_width_fits_longest_clock_at_100_percent() {
         let (width, _) = bubble_size(96, 100);
-        assert_eq!(width, 140);
+        assert_eq!(width, 134);
         let text = bubble_text_width(width, 96);
         // 「距休息 600:00」约 83px，「Break in 600:00」约 90px；96 DPI 标准宽度下文字区为 90px。
         assert!(text >= 90, "text_width={text}");

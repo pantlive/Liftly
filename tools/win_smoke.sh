@@ -345,7 +345,7 @@ say "== c3. 检查桌面倒计时气泡 Liftly.CountdownBubble =="
 BUBBLE_COUNT="$(count_class "$MAIN_PID" "Liftly.CountdownBubble" "$WIN_LIST")"
 if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
   pass "c3. 检测到可见的 Liftly.CountdownBubble 窗口"
-  # 双行 UI 在 96 DPI、100% 下约 140x42；按窗口或系统 DPI 与 bubble_scale 校验，允许 2px 舍入误差。
+  # 单行 UI 在 96 DPI、100% 下约 134x32；按窗口或系统 DPI 与 bubble_scale 校验，允许 2px 舍入误差。
   BUBBLE_SCALE=100
   if [ -f "$TARGET_DIR/liftly.ini" ]; then
     BUBBLE_SCALE_RAW="$(awk -F= '
@@ -382,8 +382,8 @@ if [ "$WIN_RC" -eq 0 ] && [ "$BUBBLE_COUNT" -ge 1 ]; then
       fi
       local effective=$(((dpi * scale + 50) / 100))
       [ "$effective" -lt 1 ] && effective=1
-      local expect_width=$(((140 * effective + 48) / 96))
-      local expect_height=$(((42 * effective + 48) / 96))
+      local expect_width=$(((134 * effective + 48) / 96))
+      local expect_height=$(((32 * effective + 48) / 96))
       local diff_width=$((width - expect_width))
       local diff_height=$((height - expect_height))
       [ "$diff_width" -lt 0 ] && diff_width=$((-diff_width))
