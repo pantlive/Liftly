@@ -1,4 +1,4 @@
-//! 桌面倒计时气泡。浅绿色双行圆角卡片，可拖动、拖边缩放并按显示器工作区夹取。
+//! 桌面倒计时气泡。双行圆角卡片，可拖动、拖边缩放、切换皮肤并按显示器工作区夹取。
 
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Once;
@@ -29,6 +29,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 
 use super::{wide, AppIcon};
+use crate::config::BubbleTheme;
 use crate::view::{self, BubbleRect, ResizeEdge, WorkArea};
 
 const BUBBLE_CLASS: &str = "Liftly.CountdownBubble";
@@ -48,6 +49,8 @@ static DRAG_CURSOR_Y: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_X: AtomicI32 = AtomicI32::new(0);
 static DRAG_WINDOW_Y: AtomicI32 = AtomicI32::new(0);
 static BUBBLE_SCALE: AtomicU32 = AtomicU32::new(100);
+/// 当前皮肤的编码，见 [`theme_code`]。
+static BUBBLE_THEME: AtomicU32 = AtomicU32::new(0);
 /// 0 表示没有在调整大小；非 0 为 [`ResizeEdge`] 的编码。
 static RESIZE_EDGE: AtomicU32 = AtomicU32::new(0);
 static RESIZE_START_W: AtomicI32 = AtomicI32::new(0);
@@ -75,9 +78,11 @@ impl Bubble {
         paused: bool,
         saved: Option<(i32, i32)>,
         scale: u32,
+        theme: BubbleTheme,
     ) -> bool {
         REMAINING_MS.store(remaining_ms, Ordering::SeqCst);
         PAUSED.store(paused, Ordering::SeqCst);
+        BUBBLE_THEME.store(theme_code(theme), Ordering::SeqCst);
 
         let mut hwnd = current_hwnd();
         if hwnd.is_null() {
@@ -756,11 +761,10 @@ unsafe fn paint(hwnd: HWND) {
     // GDI 接收的是圆角椭圆的直径，与命中测试使用同一个半径。
     let region = CreateRoundRectRgn(0, 0, width + 1, height + 1, radius * 2, radius * 2);
     let paused = PAUSED.load(Ordering::SeqCst);
-    let (background_color, border, status_color) = if paused {
-        (rgb(255, 248, 225), rgb(199, 162, 91), rgb(143, 99, 27))
-    } else {
-        (rgb(239, 248, 225), rgb(115, 181, 83), rgb(58, 104, 48))
-    };
+    let palette =
+        view::bubble_palette(theme_from_code(BUBBLE_THEME.load(Ordering::SeqCst)), paused);
+    let background_color = rgb_tuple(palette.background);
+    let border = rgb_tuple(palette.border);
     let dpi = effective_dpi(hwnd);
     let scaled = |value| view::scale_for_dpi(value, dpi);
 
@@ -780,10 +784,10 @@ unsafe fn paint(hwnd: HWND) {
     }
 
     // 文字和右侧品牌图标分别占用固定区域，最长配置倒计时 600:00 也能完整显示。
-    let pad = scaled(9);
-    let icon_size = scaled(28);
+    let pad = scaled(view::BUBBLE_PAD);
+    let icon_size = scaled(view::BUBBLE_ICON);
     let icon_left = width - pad - icon_size;
-    let text_right = icon_left - scaled(7);
+    let text_right = pad + view::bubble_text_width(width, dpi);
     let font_size = scaled(13);
     let clock = crate::view::format_clock(REMAINING_MS.load(Ordering::SeqCst));
     let countdown = format!("距休息 {clock}");
@@ -799,7 +803,7 @@ unsafe fn paint(hwnd: HWND) {
         &countdown_rect,
         font_size,
         FW_NORMAL as i32,
-        rgb(43, 82, 43),
+        rgb_tuple(palette.countdown),
     );
 
     let status_rect = RECT {
@@ -814,7 +818,7 @@ unsafe fn paint(hwnd: HWND) {
         &status_rect,
         font_size,
         FW_NORMAL as i32,
-        status_color,
+        rgb_tuple(palette.status),
     );
 
     // 复用嵌入的 Liftly 图标；AppIcon 在绘制结束时释放自有句柄，共享兜底图标不销毁。
@@ -895,4 +899,26 @@ const fn key_color() -> u32 {
 
 const fn rgb(red: u8, green: u8, blue: u8) -> u32 {
     (red as u32) | ((green as u32) << 8) | ((blue as u32) << 16)
+}
+
+const fn rgb_tuple((red, green, blue): (u8, u8, u8)) -> u32 {
+    rgb(red, green, blue)
+}
+
+const fn theme_code(theme: BubbleTheme) -> u32 {
+    match theme {
+        BubbleTheme::Green => 0,
+        BubbleTheme::Blue => 1,
+        BubbleTheme::Orange => 2,
+        BubbleTheme::Dark => 3,
+    }
+}
+
+const fn theme_from_code(code: u32) -> BubbleTheme {
+    match code {
+        1 => BubbleTheme::Blue,
+        2 => BubbleTheme::Orange,
+        3 => BubbleTheme::Dark,
+        _ => BubbleTheme::Green,
+    }
 }

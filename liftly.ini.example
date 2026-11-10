@@ -25,3 +25,6 @@ bubble_position = auto
 
 # 气泡大小百分比，50-300；100 为标准大小
 bubble_scale = 100
+
+# 气泡皮肤：green/blue/orange/dark
+bubble_theme = green

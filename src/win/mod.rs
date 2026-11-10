@@ -24,7 +24,9 @@ use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::HiDpi::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::config::{merge_into_ini, BubblePosition, Config, ConfigPatch, BUBBLE_SCALE_RANGE};
+use crate::config::{
+    merge_into_ini, BubblePosition, BubbleTheme, Config, ConfigPatch, BUBBLE_SCALE_RANGE,
+};
 use crate::schedule::{Event, Phase, Schedule};
 use crate::view;
 
@@ -406,6 +408,20 @@ impl App {
         });
     }
 
+    /// 气泡皮肤只影响配色，不重置计时。
+    fn set_bubble_theme(&mut self, theme: BubbleTheme) {
+        if self.cfg.bubble_theme == theme {
+            return;
+        }
+        let now = now_ms();
+        self.cfg.bubble_theme = theme;
+        self.sync_bubble(now);
+        self.save_patch(&ConfigPatch {
+            bubble_theme: Some(theme),
+            ..ConfigPatch::default()
+        });
+    }
+
     fn update_tip(&mut self, now: u64) {
         let tip = match self.schedule.phase() {
             Phase::Working if self.schedule.warning_active(now) => {
@@ -439,8 +455,13 @@ impl App {
         let paused = self.schedule.phase() == Phase::Paused;
         let saved = self.cfg.bubble_position.coordinates();
         // 创建失败时静默降级，核心计时和托盘功能不受影响。
-        self.bubble
-            .show(remaining, paused, saved, self.cfg.bubble_scale);
+        self.bubble.show(
+            remaining,
+            paused,
+            saved,
+            self.cfg.bubble_scale,
+            self.cfg.bubble_theme,
+        );
     }
 
     /// 拖动结束或显示器变化后，把窗口实际左上角写回 INI；不走 apply_patch，避免重置计时。
@@ -852,6 +873,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
                 app.set_bubble_enabled(enabled);
             }
             Some(tray::MenuAction::SetBubbleScale(value)) => app.set_bubble_scale(value),
+            Some(tray::MenuAction::SetBubbleTheme(value)) => app.set_bubble_theme(value),
             Some(tray::MenuAction::SetWork(value)) => app.apply_patch(ConfigPatch {
                 work_minutes: Some(value),
                 ..ConfigPatch::default()
