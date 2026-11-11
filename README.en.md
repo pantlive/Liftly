@@ -12,10 +12,10 @@ People who sit for long stretches often forget to stand up, and their lower back
 ## Features
 
 - Before lock, a reminder window pops up in the bottom-right corner and counts down every second (click to dismiss; if the popup cannot be created it falls back to a tray balloon).
-- By default a compact always-on-top countdown bubble sits in the top-right of the work area (about 134×32 at 96 DPI and 100% scale): light-green background, thin green border and small rounded corners by default. A single line updates every second with “距休息 MM:SS” (or “Break in MM:SS” in English), and the Liftly icon sits on the right. While paused it shows “已暂停 MM:SS” / “Paused MM:SS” and uses that skin's paused colors. It hides during breaks and while the workstation is locked, and it does not steal focus. Hover the bubble edge for a resize cursor and drag to change size (50%–300%); dragging the middle still moves it. On release it clamps to the nearest monitor work area and saves to the INI. You can hide it, resize it, or switch skins (fresh green / sky blue / warm orange / dark) from the tray menu; those choices persist.
+- By default a compact always-on-top countdown bubble sits in the top-right of the work area (about 134×32 at 96 DPI and 100% scale): light-green background, thin green border and small rounded corners by default. A single line updates every second with “距休息 MM:SS” (or “Break in MM:SS” in English), and the Liftly icon sits on the right. While paused it shows “已暂停 MM:SS” / “Paused MM:SS” and uses that skin's paused colors. It hides during breaks and while the workstation is locked, and it does not steal focus. Hover the bubble edge for a resize cursor and drag to change size (50%–300%); dragging the middle still moves it. On release it clamps to the nearest monitor work area and saves to the INI. You can hide it, resize it, or switch skins (fresh green / sky blue / warm orange / dark / sakura pink) from the tray menu; those choices persist.
 - During a break it enumerates every monitor, creates a topmost full-screen overlay on each, and shows the reminder and remaining break time in the center. English copy is “Time to stand up and move!”, “Time left MM:SS”, and “Unlocks automatically when time is up” (plus the emergency-unlock chord when that option is on).
 - Low-level keyboard and mouse hooks block input during the break; time-up unlocks automatically.
-- The tray context menu has presets for work, break, and warning durations, plus bubble size (small / standard / large / larger / extra large) and bubble skin (fresh green / sky blue / warm orange / dark). “自定义…” or “设置…” lets you type any legal duration and toggle the unlock options; double-clicking the tray icon also opens Settings.
+- The tray context menu has presets for work, break, and warning durations, plus bubble size (small / standard / large / larger / extra large) and bubble skin (fresh green / sky blue / warm orange / dark / sakura pink). “自定义…” or “设置…” lets you type any legal duration and toggle the unlock options; double-clicking the tray icon also opens Settings.
 - The entire UI is available in Chinese and English. Choose “English” under “Language” in Settings and save: the tray menu, tray tips and balloons, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay all switch immediately without resetting the timer. “System default” follows the Windows display language.
 - Timing pauses while the workstation is locked; unlocking or waking from sleep starts a fresh full work period.
 - Emergency unlock: during a break, hold Ctrl, Alt, and Shift (either side) and press F12 to end the break early (on by default, can be turned off).
@@ -61,7 +61,7 @@ Changes from the tray take effect immediately and are saved to `liftly.ini`, kee
 | `show_bubble` | `true` | `true/false` | Show the desktop countdown bubble; always hidden during breaks and while locked |
 | `bubble_position` | `auto` | `auto` or `x,y` | Top-left of the bubble; `auto` means top-right of the work area. Saved on drag; off-screen positions are clamped back into the visible work area |
 | `bubble_scale` | `100` | `50..=300` | Bubble size percent; `100` is the standard size. The tray menu can switch 80/100/125/150/200, or you can drag the bubble edge |
-| `bubble_theme` | `green` | `green`/`blue`/`orange`/`dark` | Bubble skin; the tray menu can switch fresh green, sky blue, warm orange, or dark. Illegal values are ignored |
+| `bubble_theme` | `green` | `green`/`blue`/`orange`/`dark`/`pink` | Bubble skin; the tray menu can switch fresh green, sky blue, warm orange, dark, or sakura pink. Illegal values are ignored |
 | `language` | `auto` | `auto`/`zh`/`en` | UI language. `auto` follows the Windows display language (Chinese on a Chinese UI, English otherwise). The tray menu, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay all follow this setting; change it under “Language” in Settings. Saving other settings does not append this key |
 
 `liftly.ini` uses a simple `key = value` format. Lines starting with `#` or `;` are comments. See `liftly.ini.example` in the same folder:
@@ -91,7 +91,7 @@ bubble_position = auto
 # Bubble size percent, 50-300; 100 is the standard size
 bubble_scale = 100
 
-# Bubble skin: green/blue/orange/dark
+# Bubble skin: green/blue/orange/dark/pink
 bubble_theme = green
 
 # UI language: auto (follow Windows) / zh / en; applies to every UI surface and can be changed in Settings

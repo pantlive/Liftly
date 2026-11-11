@@ -286,10 +286,16 @@ pub const fn bubble_scale_labels(lang: Lang) -> [&'static str; 5] {
 }
 
 /// 气泡皮肤名称。
-pub const fn bubble_theme_labels(lang: Lang) -> [&'static str; 4] {
+pub const fn bubble_theme_labels(lang: Lang) -> [&'static str; 5] {
     match lang {
-        Lang::Zh => ["清新绿", "天空蓝", "暖橙", "深色"],
-        Lang::En => ["Fresh green", "Sky blue", "Warm orange", "Dark"],
+        Lang::Zh => ["清新绿", "天空蓝", "暖橙", "深色", "樱花粉"],
+        Lang::En => [
+            "Fresh green",
+            "Sky blue",
+            "Warm orange",
+            "Dark",
+            "Sakura pink",
+        ],
     }
 }
 
@@ -679,11 +685,17 @@ mod tests {
         );
         assert_eq!(
             bubble_theme_labels(Lang::Zh),
-            ["清新绿", "天空蓝", "暖橙", "深色"]
+            ["清新绿", "天空蓝", "暖橙", "深色", "樱花粉"]
         );
         assert_eq!(
             bubble_theme_labels(Lang::En),
-            ["Fresh green", "Sky blue", "Warm orange", "Dark"]
+            [
+                "Fresh green",
+                "Sky blue",
+                "Warm orange",
+                "Dark",
+                "Sakura pink"
+            ]
         );
         assert_eq!(tray_tip_warning(Lang::Zh, 59), "站会儿：59 秒后休息");
         assert_eq!(tray_tip_warning(Lang::En, 59), "Liftly: break in 59 s");

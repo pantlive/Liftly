@@ -904,6 +904,7 @@ const fn theme_code(theme: BubbleTheme) -> u32 {
         BubbleTheme::Blue => 1,
         BubbleTheme::Orange => 2,
         BubbleTheme::Dark => 3,
+        BubbleTheme::Pink => 4,
     }
 }
 
@@ -912,6 +913,7 @@ const fn theme_from_code(code: u32) -> BubbleTheme {
         1 => BubbleTheme::Blue,
         2 => BubbleTheme::Orange,
         3 => BubbleTheme::Dark,
+        4 => BubbleTheme::Pink,
         _ => BubbleTheme::Green,
     }
 }

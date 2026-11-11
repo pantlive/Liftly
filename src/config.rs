@@ -20,11 +20,12 @@ pub const BUBBLE_SCALE_RANGE: RangeInclusive<u32> = 50..=300;
 /// 托盘菜单的气泡大小预设档位。
 pub const BUBBLE_SCALE_PRESETS: [u32; 5] = [80, 100, 125, 150, 200];
 /// 托盘菜单的气泡皮肤预设。
-pub const BUBBLE_THEME_PRESETS: [BubbleTheme; 4] = [
+pub const BUBBLE_THEME_PRESETS: [BubbleTheme; 5] = [
     BubbleTheme::Green,
     BubbleTheme::Blue,
     BubbleTheme::Orange,
     BubbleTheme::Dark,
+    BubbleTheme::Pink,
 ];
 
 /// 倒计时气泡的保存位置；`Auto` 使用工作区右上角。
@@ -55,7 +56,7 @@ impl BubblePosition {
     }
 }
 
-/// 倒计时气泡皮肤；INI 中写作 `green` / `blue` / `orange` / `dark`。
+/// 倒计时气泡皮肤；INI 中写作 `green` / `blue` / `orange` / `dark` / `pink`。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BubbleTheme {
     #[default]
@@ -63,6 +64,7 @@ pub enum BubbleTheme {
     Blue,
     Orange,
     Dark,
+    Pink,
 }
 
 impl BubbleTheme {
@@ -75,6 +77,8 @@ impl BubbleTheme {
             Some(Self::Orange)
         } else if value.eq_ignore_ascii_case("dark") {
             Some(Self::Dark)
+        } else if value.eq_ignore_ascii_case("pink") {
+            Some(Self::Pink)
         } else {
             None
         }
@@ -86,6 +90,7 @@ impl BubbleTheme {
             Self::Blue => "blue",
             Self::Orange => "orange",
             Self::Dark => "dark",
+            Self::Pink => "pink",
         }
     }
 }
@@ -158,7 +163,7 @@ const INI_COMMENTS: [&str; 10] = [
     "# 是否显示桌面倒计时气泡",
     "# 气泡位置：auto（工作区右上角）或 x,y（例如 1200,80），拖动后自动保存",
     "# 气泡大小百分比，50-300；100 为标准大小",
-    "# 气泡皮肤：green/blue/orange/dark",
+    "# 气泡皮肤：green/blue/orange/dark/pink",
     "# 界面语言：auto/zh/en",
 ];
 
@@ -546,7 +551,8 @@ mod tests {
                 BubbleTheme::Green,
                 BubbleTheme::Blue,
                 BubbleTheme::Orange,
-                BubbleTheme::Dark
+                BubbleTheme::Dark,
+                BubbleTheme::Pink
             ]
         );
         for theme in BUBBLE_THEME_PRESETS {
@@ -1012,7 +1018,7 @@ mod tests {
         assert!(text.contains("bubble_position = auto"));
         assert!(text.contains("# 气泡大小百分比，50-300；100 为标准大小"));
         assert!(text.contains("bubble_scale = 100"));
-        assert!(text.contains("# 气泡皮肤：green/blue/orange/dark"));
+        assert!(text.contains("# 气泡皮肤：green/blue/orange/dark/pink"));
         assert!(text.contains("bubble_theme = green"));
         assert!(text.ends_with('\n'));
         assert_eq!(Config::parse_ini(&text), cfg);
@@ -1085,6 +1091,8 @@ mod tests {
             ("ORANGE", BubbleTheme::Orange),
             ("dark", BubbleTheme::Dark),
             (" Dark ", BubbleTheme::Dark),
+            ("pink", BubbleTheme::Pink),
+            ("PINK", BubbleTheme::Pink),
         ] {
             let cfg = Config::parse_ini(&format!("bubble_theme = {value}\n"));
             assert_eq!(cfg.bubble_theme, expected, "value={value}");
@@ -1126,12 +1134,32 @@ mod tests {
         assert!(saved_text.starts_with(original.trim_end()));
         assert!(saved_text.contains("work_minutes = 37\n"));
         assert!(saved_text.contains("bubble_scale = 100\n"));
-        assert!(saved_text.contains("# 气泡皮肤：green/blue/orange/dark\n"));
+        assert!(saved_text.contains("# 气泡皮肤：green/blue/orange/dark/pink\n"));
         assert!(saved_text.ends_with("bubble_theme = dark\n"));
         let cfg = Config::parse_ini(&saved_text);
         assert_eq!(cfg.bubble_theme, BubbleTheme::Dark);
         assert_eq!(cfg.work_minutes, 37);
         assert_eq!(cfg.bubble_scale, 100);
+    }
+
+    #[test]
+    fn patching_pink_theme_saves_only_that_key() {
+        let original = "work_minutes = 37\nbreak_minutes = 5\nwarn_seconds = 120\nreset_on_unlock = false\nemergency_unlock = true\nshow_bubble = true\nbubble_position = auto\nbubble_scale = 100\nbubble_theme = green\n";
+        let runtime = Config::parse_ini(original);
+        let patch = ConfigPatch {
+            bubble_theme: Some(BubbleTheme::Pink),
+            ..ConfigPatch::default()
+        };
+        let applied = runtime.apply_patch(&patch).unwrap();
+        assert_eq!(applied.bubble_theme, BubbleTheme::Pink);
+        assert_eq!(applied.work_minutes, 37);
+
+        let saved_text = merge_into_ini(original, &patch).unwrap();
+        assert_eq!(
+            saved_text,
+            original.replace("bubble_theme = green", "bubble_theme = pink")
+        );
+        assert_eq!(Config::parse_ini(&saved_text), applied);
     }
 
     #[test]

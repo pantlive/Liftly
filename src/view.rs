@@ -157,6 +157,18 @@ pub fn bubble_palette(theme: BubbleTheme, paused: bool) -> BubblePalette {
             countdown: (230, 210, 170),
             status: (200, 170, 100),
         },
+        (BubbleTheme::Pink, false) => BubblePalette {
+            background: (255, 236, 242),
+            border: (232, 128, 163),
+            countdown: (150, 45, 90),
+            status: (175, 72, 110),
+        },
+        (BubbleTheme::Pink, true) => BubblePalette {
+            background: (255, 242, 236),
+            border: (186, 142, 156),
+            countdown: (140, 55, 85),
+            status: (158, 78, 102),
+        },
     }
 }
 
@@ -781,5 +793,31 @@ mod tests {
         assert_eq!(paused.border, (199, 162, 91));
         assert_eq!(paused.countdown, (43, 82, 43));
         assert_eq!(paused.status, (143, 99, 27));
+    }
+
+    fn rgb_sum((red, green, blue): (u8, u8, u8)) -> u16 {
+        u16::from(red) + u16::from(green) + u16::from(blue)
+    }
+
+    #[test]
+    fn pink_working_and_paused_backgrounds_differ_and_text_is_darker() {
+        let working = bubble_palette(BubbleTheme::Pink, false);
+        let paused = bubble_palette(BubbleTheme::Pink, true);
+        assert_ne!(working.background, paused.background);
+        for palette in [working, paused] {
+            let background = rgb_sum(palette.background);
+            assert!(
+                rgb_sum(palette.countdown) + 80 < background,
+                "countdown={:?} background={:?}",
+                palette.countdown,
+                palette.background
+            );
+            assert!(
+                rgb_sum(palette.status) + 80 < background,
+                "status={:?} background={:?}",
+                palette.status,
+                palette.background
+            );
+        }
     }
 }

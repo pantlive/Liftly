@@ -399,7 +399,7 @@ unsafe fn append_bubble_theme(parent: HMENU, lang: Lang, current: BubbleTheme) -
         return false;
     }
     let labels = i18n::bubble_theme_labels(lang);
-    const _: () = assert!(BUBBLE_THEME_PRESETS.len() == 4);
+    const _: () = assert!(BUBBLE_THEME_PRESETS.len() == 5);
     for (index, value) in BUBBLE_THEME_PRESETS.iter().enumerate() {
         let flags = MF_STRING | if *value == current { MF_CHECKED } else { 0 };
         if AppendMenuW(
