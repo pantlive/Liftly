@@ -165,3 +165,12 @@ Full environment setup is in [docs/BUILD.md](docs/BUILD.md).
 - The bubble card receives mouse input: drag the middle to move, drag an edge to resize. Clicks on the card do not pass through to windows below; the transparent area outside the rounded corners still does. Position is stored as `bubble_position` in `liftly.ini`, size as `bubble_scale`, skin as `bubble_theme`. After a monitor is unplugged or the resolution changes, the bubble is clamped back into the nearest work area.
 - Do not run more than one copy; a named mutex keeps a single instance, and a second instance only shows “站会儿已经在运行”.
 - All UI copy (tray menu, Settings window, reminder popup, error dialogs, desktop bubble, and lock-screen overlay) is available in Chinese and English. Change it under “Language” in Settings or with `language`.
+
+## License
+
+This project is dual-licensed under either the MIT License or the Apache License, Version 2.0, at your option:
+
+- [MIT License](LICENSE-MIT)
+- [Apache License 2.0](LICENSE-APACHE)
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project shall be dual-licensed as above, without any additional terms or conditions.
